@@ -19,8 +19,36 @@ def sigmoid(value):
     return 1 / (1 + math.exp(-max(-60, min(60, value))))
 
 
-def tier(count):
-    return "Hot" if count >= 8 else "Warm" if count >= 3 else "Cold"
+USAGE_WINDOW = 16
+
+
+def usage_frequency(memory, step):
+    """Cited rounds / fixed window, never wall-clock time or lifetime count.
+    Missing history is unknown and starts cold; cumulative uses cannot date it."""
+    return len({s for s in memory.get("recent_uses", [])
+                if step - USAGE_WINDOW < s <= step}) / USAGE_WINDOW
+
+
+def tier(frequency):
+    return "Hot" if frequency >= .5 else "Warm" if frequency >= .125 else "Cold"
+
+
+def select_tiers(rows, top_k):
+    """Reserve one place per populated tier, then fill by unchanged score.
+    At budgets below three, Hot then Warm then Cold get the limited places."""
+    chosen = {}
+    for name in ("Hot", "Warm", "Cold"):
+        if len(chosen) >= top_k:
+            break
+        winner = next((row for row in rows if row["tier"] == name), None)
+        if winner is not None:
+            chosen[winner["id"]] = "tier_quota"
+    for row in rows:
+        if len(chosen) >= top_k:
+            break
+        if row["id"] not in chosen:
+            chosen[row["id"]] = "score_fill"
+    return chosen
 
 
 def require_text(value, field, maximum=6000):
@@ -53,9 +81,11 @@ def centered(vector, mean):
     return [value / norm for value in residual]
 
 
-def rank(memories, query, emotion, enabled=True, top_k=3):
+def rank(memories, query, emotion, enabled=True, top_k=3, step=0, tiered=True):
     """No mutations. Return all score components and a deterministic selection.
     Both sides of each comparison are centered on the library mean first."""
+    if type(top_k) is not int or top_k < 0:
+        raise ValueError("top_k must be a nonnegative integer")
     memories = [memory for memory in memories if memory.get("superseded_by") is None]
     mean_vector = centroid([memory["vector"] for memory in memories])
     mean_affect = centroid([memory["affect"] for memory in memories])
@@ -69,12 +99,15 @@ def rank(memories, query, emotion, enabled=True, top_k=3):
         match = dot(emotion, centered(memory["affect"], mean_affect)) if emotion is not None else 0.0
         read = sigmoid(4 * match) if enabled else 0.5
         score = relevance * read * memory["write_strength"]
-        rows.append({**copy.deepcopy(memory), "tier": tier(memory["uses"]),
+        frequency = usage_frequency(memory, step)
+        rows.append({**copy.deepcopy(memory), "tier": tier(frequency), "usage_frequency": frequency,
                      "relevance": relevance, "emotion_match": match,
                      "read_strength": read, "score": score})
     rows.sort(key=lambda row: (-row["score"], row["id"]))
-    for index, row in enumerate(rows):
-        row["selected"] = index < top_k
+    chosen = select_tiers(rows, top_k) if tiered else {r["id"]: "score_only" for r in rows[:top_k]}
+    for row in rows:
+        row["selected"] = row["id"] in chosen
+        row["selected_by"] = chosen.get(row["id"])
     return rows
 
 
@@ -172,18 +205,20 @@ class Runtime:
             names = [row[0] for row in db.execute("SELECT name FROM snapshots ORDER BY name")]
             traces = [json.loads(row[0]) for row in db.execute("SELECT trace FROM rounds ORDER BY id DESC LIMIT 20")]
         for memory in state["memories"]:
-            memory["tier"] = tier(memory["uses"])
+            memory["usage_frequency"] = usage_frequency(memory, state["step"])
+            memory["tier"] = tier(memory["usage_frequency"])
         return {"revision": revision, "state": state, "snapshots": names,
                 "traces": traces, "mode": self.provider.mode, "rho": self.rho,
-                "profile": self.provider.profile}
+                "profile": self.provider.profile, "usage_window": USAGE_WINDOW}
 
-    def retrieve(self, text, enabled=True):
+    def retrieve(self, text, enabled=True, tiered=True):
         text = require_text(text, "input", 2000)
         _, state = self.load()
         query = self._embed(text, self.dimension(state), "query")
-        return rank(state["memories"], query, state["emotion"], enabled)
+        return rank(state["memories"], query, state["emotion"], enabled,
+                    step=state["step"], tiered=tiered)
 
-    def step(self, text=None, enabled=True):
+    def step(self, text=None, enabled=True, tiered=True):
         # None is a clock tick with no new external input.
         if text is not None:
             text = require_text(text, "input", 2000)
@@ -192,7 +227,7 @@ class Runtime:
         query = self._embed(text, dimension, "query") if text is not None else None
         dimension = len(query) if query is not None else dimension
         before = copy.deepcopy(state["emotion"])
-        rows = rank(state["memories"], query, before, enabled)
+        rows = rank(state["memories"], query, before, enabled, step=state["step"], tiered=tiered)
         selected = [row for row in rows if row["selected"]]
         result = validate_cognition(self.provider.cognize(text, copy.deepcopy(selected)), selected)
         feeling = self._embed(result["appraisal"], dimension)
@@ -211,10 +246,15 @@ class Runtime:
                              "affect": affect, "write_strength": sigmoid(3 * aligned), "uses": 0,
                              "created_step": state["step"] + 1, "created_revision": revision + 1,
                              "origin": "external_input" if text is not None else "internal_cognition",
-                             "superseded_by": None})
+                             "superseded_by": None, "recent_uses": []})
         for memory in state["memories"]:
+            if memory.get("superseded_by") is not None:
+                continue
+            memory["recent_uses"] = sorted({s for s in memory.get("recent_uses", [])
+                                            if state["step"] + 1 - USAGE_WINDOW < s <= state["step"]})
             if memory["id"] in result["used_memory_ids"]:
                 memory["uses"] += 1
+                memory["recent_uses"].append(state["step"] + 1)
         for memory in prepared:
             memory["id"] = state["next_id"]
             state["next_id"] += 1
@@ -224,6 +264,7 @@ class Runtime:
             state["memories"].append(memory)
         state.update(emotion=after, appraisal=result["appraisal"], step=state["step"] + 1)
         trace = {"step": state["step"], "input": text, "enabled": enabled,
+                 "tiered": tiered, "usage_window": USAGE_WINDOW,
                  "emotion_before": before, "emotion_after": after, "rho": self.rho,
                  "retrieval": rows, "cognition": result,
                  "written_ids": [m["id"] for m in prepared], "mode": self.provider.mode}
@@ -247,7 +288,7 @@ class Runtime:
         revision, _ = self.load()
         self._commit(revision, self.snapshot(name))
 
-    def compare(self, text, baseline, a, b):
+    def compare(self, text, baseline, a, b, tiered=True):
         """Four read-only trials: fixed memories/input, only E and retrieval gate vary."""
         text = require_text(text, "input", 2000)
         common = self.snapshot(baseline)
@@ -258,13 +299,15 @@ class Runtime:
                 emotion = self.snapshot(name)["emotion"]
                 if emotion is None:
                     raise ValueError("Choose snapshots with an initialized emotion")
-                rows = rank(common["memories"], query, emotion, enabled)
+                rows = rank(common["memories"], query, emotion, enabled,
+                            step=common["step"], tiered=tiered)
                 selected = [row for row in rows if row["selected"]]
                 result = validate_cognition(self.provider.cognize(text, copy.deepcopy(selected)), selected)
                 trials.append({"label": label, "snapshot": name, "enabled": enabled,
                                "emotion": emotion, "retrieval": rows, "cognition": result})
         return {"input": text, "baseline": baseline, "memory_ids": [m["id"] for m in common["memories"]],
-                "trials": trials, "mode": self.provider.mode,
+                "trials": trials, "mode": self.provider.mode, "tiered": tiered,
+                "usage_window": USAGE_WINDOW,
                 "note": "Only the emotion-to-read gate is ablated; historical write strengths stay fixed."}
 
     def seed(self):
@@ -287,7 +330,7 @@ class Runtime:
                 "appraisal": appraisal, "vector": vector, "affect": self._embed(appraisal, dimension),
                 "uses": 0, "write_strength": 0.5, "created_step": 0,
                 "created_revision": revision + 1, "origin": "fixture",
-                "source_memory_ids": [], "replaces": [], "superseded_by": None})
+                "source_memory_ids": [], "replaces": [], "superseded_by": None, "recent_uses": []})
             state["next_id"] += 1
         snapshots = {"baseline": copy.deepcopy(state)}
         for name, appraisal in (("A", positive), ("B", negative)):

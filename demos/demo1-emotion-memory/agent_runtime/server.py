@@ -69,11 +69,14 @@ def serve(runtime, port=8765, interval=10):
                 if not isinstance(data, dict):
                     raise ValueError("Request must be an object")
                 with lock:
+                    tiered = data.get("tiered", True)
+                    if type(tiered) is not bool:
+                        raise ValueError("tiered must be boolean")
                     if self.path == "/api/step":
                         enabled = data.get("enabled", True)
                         if type(enabled) is not bool:
                             raise ValueError("enabled must be boolean")
-                        result = runtime.step(data.get("text"), enabled)
+                        result = runtime.step(data.get("text"), enabled, tiered)
                     elif self.path == "/api/seed":
                         result = runtime.seed()
                     elif self.path == "/api/save":
@@ -86,7 +89,7 @@ def serve(runtime, port=8765, interval=10):
                     elif self.path == "/api/compare":
                         # Pausing the scheduler keeps the workspace fixed while inspecting results.
                         clock["running"] = False
-                        result = runtime.compare(data.get("text"), data.get("baseline"), data.get("a"), data.get("b"))
+                        result = runtime.compare(data.get("text"), data.get("baseline"), data.get("a"), data.get("b"), tiered)
                     elif self.path == "/api/clock":
                         if type(data.get("running")) is not bool:
                             raise ValueError("running must be boolean")

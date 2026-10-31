@@ -175,7 +175,7 @@ class RuntimeTests(unittest.TestCase):
         before = copy.deepcopy(state)
         rank(state["memories"], self.provider.embed("合作"), state["emotion"])
         self.assertEqual(before, state)
-        self.assertEqual([tier(i) for i in (0, 2, 3, 7, 8)], ["Cold", "Cold", "Warm", "Warm", "Hot"])
+        self.assertEqual([tier(i / 16) for i in (0, 1, 2, 7, 8)], ["Cold", "Cold", "Warm", "Warm", "Hot"])
 
     def test_invalid_vectors_rejected(self):
         for vector in ([], [0, 0], [float("nan")], [float("inf")], [True], ["x"]):
