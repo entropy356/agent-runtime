@@ -2,6 +2,10 @@
 
 一个探索具有持续内部状态的 Agent Runtime 的实验项目。
 
+## 项目愿景
+
+- [信息化历史](docs/vision.md)
+
 ## 设计
 
 - [核心设计](docs/design.md)
