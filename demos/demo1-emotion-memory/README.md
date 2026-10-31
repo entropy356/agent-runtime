@@ -59,18 +59,24 @@ E_next = rho * E + (1 - rho) * V
 
 默认 `rho=0.85`。
 
-记忆检索同时考虑输入相关性、Emotion 匹配和历史写入强度：
+记忆检索同时考虑输入相关性、Emotion 匹配和历史写入强度。所有比较都在中心化空间里进行：查询、记忆内容、Emotion 与记忆 affect 各自减掉本空间的库内均值，再归一化。
 
 ```text
-relevance_i = max(0, dot(unit(embed(input)), memory_i.vector))
-match_i = dot(E, memory_i.affect)
+relevance_i = (1 + dot(q, v_i)) / 2       # 中心化余弦移位，0.5 = 与库内平均内容相同
+match_i = dot(e, a_i)                     # 中心化余弦
 read_i = sigmoid(4 * match_i)
 score_i = relevance_i * read_i * memory_i.write_strength
 ```
 
+中心化不是修饰。19 条 768 维记忆两两余弦均值 0.739、均值向量范数 0.868，不减掉这个公共分量时 `read_i` 恒落在 0.92–0.95，换哪条记忆都一样；减掉后跨度从 0.027 升到 0.353。
+
+`relevance_i` 移位到 `[0, 1]` 而不是截断：均值按定义让约一半记忆落在负半轴，截断会把它们压成同一个 0，排序退化为按 ID。`0.5` 因此有明确含义——与库内平均内容相同。
+
+均值取自当前记忆库，增删记忆会改变所有分数；库为空时没有均值，退化为未中心化。
+
 关闭 Emotion 读取调节时，`read_i` 固定为 `0.5`。
 
-每条新记忆也带有独立的 affect 向量。Emotion 与 affect 的匹配会影响其持久写入权重。读取本身不修改状态；认知与 embedding 全部成功后，才统一提交 Emotion、新记忆和使用记录。
+每条新记忆也带有独立的 affect 向量。`write_strength` 同样以写入前记忆库的感受均值中心化，`0.5` 表示与库内既有感受无差别；它在写入时算定，之后不再改变。读取本身不修改状态；认知与 embedding 全部成功后，才统一提交 Emotion、新记忆和使用记录。
 
 记忆按实际引用次数暂分为 Cold / Warm / Hot，不使用现实时间衰减。Clock 在本 Demo 中只是固定间隔循环，不受 Emotion 调节。
 
