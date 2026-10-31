@@ -12,6 +12,8 @@
 
 ## Demos
 
+- [Demo 的组织与演化](docs/demos.md)
+
 ### Demo 1 — Emotion-guided Memory Retrieval
 
 验证情绪向量如何影响记忆检索。
