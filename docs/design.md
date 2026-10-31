@@ -1,6 +1,6 @@
 # Agent Runtime Design
 
-### 核心概念
+## 核心概念
 
 Agent Runtime 持续维护内部状态。每次运行都可以基于当前状态、外部输入和认知结果更新系统状态。
 
@@ -9,7 +9,7 @@ Agent Runtime 持续维护内部状态。每次运行都可以基于当前状态
 - **Clock**：Runtime 的整体运行频率。
 - **LLM**：参与理解、联想、推理、生成和决策的认知过程。
 
-### Emotion
+## Emotion
 
 情绪表示为高维向量：
 
@@ -33,7 +33,7 @@ E_{k+1}=\rho E_k+\Delta E_k
 
 \(\Omega_k\) 表示外部输入、认知结果、行动结果及其他相关状态。
 
-### Memory
+## Memory
 
 Memory 由多条具有独立身份的记忆组成。每条记忆附带一个情绪向量：
 
@@ -72,7 +72,7 @@ g_w(s)=\sigma(\beta s)
 - 读取本身不直接改变当前情绪或记忆内容。
 - LLM 完成本轮认知后，认知结果进入统一的状态更新；此时可以更新 Emotion、Memory 及其他系统状态。
 
-### Clock
+## Clock
 
 Clock 表示 Agent Runtime 的整体运行频率。情绪可以影响运行频率：
 
@@ -84,7 +84,7 @@ f_k=g_c(E_k)
 
 现实时间用于外部调度；内部 Clock 表示 Runtime 自身的运行频率。
 
-### LLM：认知过程
+## LLM：认知过程
 
 LLM 是认知过程，不是与 Emotion、Memory 并列的状态模块。它基于外部输入和当前系统状态进行理解、联想、推理、生成与决策，并产生认知结果、记忆内容、行动或状态更新。
 
@@ -105,7 +105,7 @@ S_{k+1}=Update(S_k,Y_k,X_k)
 
 LLM 的模型权重和上下文窗口不等同于 Agent 的持续记忆；LLM 生成的情绪描述也不等同于 Emotion 状态本身。
 
-### 运行关系
+## 运行关系
 
 ```text
 Current State + External Input
@@ -124,7 +124,7 @@ Current State + External Input
 
 每次 Runtime 运行都可以更新系统状态。Clock 决定 Runtime 的运行频率；Emotion 影响 Memory 的读写强度和 Clock 频率；LLM 参与认知并产生状态更新所需的结果。
 
-### 记号
+## 记号
 
 - \(k\)：Runtime 运行轮次，不表示现实时间。
 - \(i\)：一条具体记忆。
