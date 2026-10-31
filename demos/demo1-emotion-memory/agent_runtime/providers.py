@@ -50,7 +50,8 @@ class OfflineProvider:
             feeling, used = text, []
         return {"answer": answer, "appraisal": feeling,
                 "used_memory_ids": used,
-                "memories": [{"content": text, "appraisal": feeling}]}
+                "memories": [{"content": text, "appraisal": feeling,
+                              "source_memory_ids": used, "replaces": []}]}
 
 
 SYSTEM = """你参与一个探索性的 Agent Runtime。只根据当前输入和提供的记忆回应。
@@ -60,7 +61,13 @@ SYSTEM = """你参与一个探索性的 Agent Runtime。只根据当前输入和
 answer: 给用户的中文回答；
 appraisal: 本轮认知之后的主观感受，用自由文本表达，不使用固定情绪分类；
 used_memory_ids: 回答实际依据的记忆 ID 数组，只能引用提供的 ID，可以为空；
-memories: 值得保存的新记忆数组，最多三项，每项包含 content 与 appraisal 字符串，可以为空。
+memories: 值得保存的新记忆数组，最多三项，每项包含 content 与 appraisal 字符串、source_memory_ids 与 replaces 两个 ID 数组，可以为空。
+每条记忆只表达一个可独立修正的陈述；临时状态须写明是当轮情况，勿把自己的推测写成用户事实。
+source_memory_ids: 模型自报这条新记忆依据了哪些提供的记忆，可以为空；它不是经过验证的因果关系。
+replaces: 新陈述明确纠正或更新了哪些提供的旧记忆，可以为空。只有明确更新同一事实时才替代；
+情绪改变、观点不同或记忆未被引用都不是替代理由。替代后旧记忆会退出检索。
+两种关系都只能引用本轮提供的 ID，不得引用未提供或尚未写入的记忆。
+记忆的 origin 只说明它形成于有外部输入、无外部输入的轮次，或人工夹具，不保证内容来自外部证据。
 appraisal 是感受描述，不是思维推理过程。不要输出推理过程或 JSON 之外的文字。
 
 JSON 字符串内部禁止出现英文双引号（"），需要引用时改用中文引号「」。
@@ -222,7 +229,10 @@ class APIProvider:
 
     def cognize(self, text, memories):
         # Emotion vectors/descriptions never enter this prompt: only retrieval can mediate them.
-        context = [{"id": m["id"], "content": m["content"]} for m in memories]
+        context = [{"id": m["id"], "content": m["content"],
+                    "created_step": m.get("created_step"), "origin": m.get("origin", "unknown"),
+                    "source_memory_ids": m.get("source_memory_ids", []),
+                    "replaces": m.get("replaces", [])} for m in memories]
         payload = {"model": self.chat_model, "temperature": 0,
                    "messages": [{"role": "system", "content": SYSTEM},
                                 {"role": "user",

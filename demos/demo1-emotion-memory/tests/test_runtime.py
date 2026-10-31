@@ -205,7 +205,9 @@ class APIAdapterTests(unittest.TestCase):
             self.provider.cognize("当前输入", [memory])
         payload = request.call_args.args[1]
         user = json.loads(payload["messages"][1]["content"])
-        self.assertEqual(user, {"input": "当前输入", "memories": [{"id": 1, "content": "可见内容"}]})
+        self.assertEqual(user, {"input": "当前输入", "memories": [{
+            "id": 1, "content": "可见内容", "created_step": None, "origin": "unknown",
+            "source_memory_ids": [], "replaces": []}]})
         self.assertEqual(request.call_args.args[2], {"Authorization": "Bearer chat-secret"})
         self.assertNotIn("chat-secret", self.provider.profile)
         self.assertNotIn("embed-secret", self.provider.profile)

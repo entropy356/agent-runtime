@@ -56,6 +56,7 @@ def centered(vector, mean):
 def rank(memories, query, emotion, enabled=True, top_k=3):
     """No mutations. Return all score components and a deterministic selection.
     Both sides of each comparison are centered on the library mean first."""
+    memories = [memory for memory in memories if memory.get("superseded_by") is None]
     mean_vector = centroid([memory["vector"] for memory in memories])
     mean_affect = centroid([memory["affect"] for memory in memories])
     query, emotion = centered(query, mean_vector), centered(emotion, mean_affect)
@@ -90,11 +91,22 @@ def validate_cognition(result, selected):
     if not isinstance(memories, list) or len(memories) > 3:
         raise ValueError("Cognition may propose at most three memories")
     new_memories = []
+    replaced = set()
     for memory in memories:
         if not isinstance(memory, dict):
             raise ValueError("Invalid proposed memory")
+        relations = {}
+        for field in ("source_memory_ids", "replaces"):
+            ids = memory.get(field, [])
+            if not isinstance(ids, list) or any(type(i) is not int or i not in allowed for i in ids):
+                raise ValueError(f"memory.{field} must reference provided memory IDs")
+            relations[field] = sorted(set(ids))
+        if replaced.intersection(relations["replaces"]):
+            raise ValueError("A memory cannot be replaced by multiple proposals in one round")
+        replaced.update(relations["replaces"])
         new_memories.append({"content": require_text(memory.get("content"), "memory.content"),
-                             "appraisal": require_text(memory.get("appraisal"), "memory.appraisal")})
+                             "appraisal": require_text(memory.get("appraisal"), "memory.appraisal"),
+                             **relations})
     return {"answer": answer, "appraisal": appraisal,
             "used_memory_ids": sorted(set(used)), "memories": new_memories}
 
@@ -189,19 +201,26 @@ class Runtime:
         # Finish ALL provider calls before changing state. Each memory has its own affect.
         # Write strength compares against the existing affect mean, so a new memory is
         # scored by how much it differs from what is already stored, not by the shared bulk.
-        mean_affect = centroid([memory["affect"] for memory in state["memories"]])
+        mean_affect = centroid([memory["affect"] for memory in state["memories"]
+                                if memory.get("superseded_by") is None])
         prepared = []
         for proposal in result["memories"]:
             affect = self._embed(proposal["appraisal"], dimension)
             aligned = dot(centered(after, mean_affect), centered(affect, mean_affect))
             prepared.append({**proposal, "vector": self._embed(proposal["content"], dimension, "document"),
-                             "affect": affect, "write_strength": sigmoid(3 * aligned), "uses": 0})
+                             "affect": affect, "write_strength": sigmoid(3 * aligned), "uses": 0,
+                             "created_step": state["step"] + 1, "created_revision": revision + 1,
+                             "origin": "external_input" if text is not None else "internal_cognition",
+                             "superseded_by": None})
         for memory in state["memories"]:
             if memory["id"] in result["used_memory_ids"]:
                 memory["uses"] += 1
         for memory in prepared:
             memory["id"] = state["next_id"]
             state["next_id"] += 1
+            for previous in state["memories"]:
+                if previous["id"] in memory["replaces"]:
+                    previous["superseded_by"] = memory["id"]
             state["memories"].append(memory)
         state.update(emotion=after, appraisal=result["appraisal"], step=state["step"] + 1)
         trace = {"step": state["step"], "input": text, "enabled": enabled,
@@ -266,7 +285,9 @@ class Runtime:
             dimension = len(vector)
             state["memories"].append({"id": state["next_id"], "content": content,
                 "appraisal": appraisal, "vector": vector, "affect": self._embed(appraisal, dimension),
-                "uses": 0, "write_strength": 0.5})
+                "uses": 0, "write_strength": 0.5, "created_step": 0,
+                "created_revision": revision + 1, "origin": "fixture",
+                "source_memory_ids": [], "replaces": [], "superseded_by": None})
             state["next_id"] += 1
         snapshots = {"baseline": copy.deepcopy(state)}
         for name, appraisal in (("A", positive), ("B", negative)):
