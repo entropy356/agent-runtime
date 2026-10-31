@@ -82,18 +82,28 @@ score_i = relevance_i * read_i * memory_i.write_strength
 
 ### api
 
-支持同时提供 `/embeddings` 和 `/chat/completions` 的 HTTPS JSON API：
+认知与嵌入可以来自不同服务商：两侧各有基础地址、密钥和协议，代理也可以只加在其中一侧。
 
 ```bash
-export AGENT_API_BASE='https://your-provider.example/v1'
+# 认知：任意 OpenAI 兼容的 /chat/completions
+export AGENT_CHAT_BASE='https://your-llm.example/v1'
 export AGENT_CHAT_MODEL='your-chat-model'
-export AGENT_EMBEDDING_MODEL='your-embedding-model'
-export AGENT_API_KEY='your-api-key'
+export AGENT_CHAT_KEY='your-chat-key'
+
+# 嵌入：openai（/embeddings）或 gemini（:embedContent）
+export AGENT_EMBED_PROTOCOL='openai'
+export AGENT_EMBED_BASE='https://your-embedding.example/v1'
+export AGENT_EMBED_MODEL='your-embedding-model'
+export AGENT_EMBED_KEY='your-embedding-key'
+export AGENT_EMBED_DIMENSIONS='768'
+export AGENT_EMBED_PROXY='http://127.0.0.1:8080'   # 可选，仅嵌入侧
 
 python -m agent_runtime --mode api --db data/api.sqlite3 serve
 ```
 
-不同 embedding 模型应使用不同数据库。
+`AGENT_EMBED_*` 省略时回落到 `AGENT_CHAT_*`；`AGENT_API_BASE` / `AGENT_API_KEY` 仍可顶替 `AGENT_CHAT_*`，即旧的单端点模式。
+
+数据库绑定嵌入身份（协议、模型、维度），不绑定聊天模型：换聊天模型可复用数据库，换嵌入模型或维度必须新建。
 
 API 模式用同一个 embedding 空间编码文本记忆、输入和感受描述。这里把语义向量暂时作为 Emotion 空间的实验性近似，并不假设“语义相近”等同于“情绪相近”。
 
