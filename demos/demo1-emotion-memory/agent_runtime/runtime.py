@@ -20,6 +20,23 @@ def sigmoid(value):
 
 
 USAGE_WINDOW = 16
+# A recall widens the slice the next cognition sees. It is still the same ranking,
+# the same emotion and the same write strengths; only the query and the budget differ.
+RECALL_K = 6
+
+
+def recall_request(result, budget):
+    """Return the model's recall wording, or None when it answered.
+    Requesting past the budget is a contract violation, not a request to retry."""
+    if not isinstance(result, dict):
+        raise ValueError("Cognition must return an object")
+    if "recall" not in result:
+        return None
+    if budget <= 0:
+        raise ValueError("Cognition asked to recall after the budget was spent; state was not changed")
+    if "answer" in result or "appraisal" in result:
+        raise ValueError("A recall request cannot also carry an answer")
+    return require_text(result.get("recall"), "recall", 500)
 
 
 def usage_frequency(memory, step):
@@ -85,6 +102,7 @@ def rank(memories, query, emotion, enabled=True, top_k=3, step=0):
     chosen = {row["id"] for row in rows[:top_k]}
     for row in rows:
         row["selected"] = row["id"] in chosen
+        row["selected_by"] = "score" if row["selected"] else None
     return rows
 
 
@@ -122,10 +140,13 @@ def validate_cognition(result, selected):
 
 
 class Runtime:
-    def __init__(self, database, provider, rho=0.85):
+    def __init__(self, database, provider, rho=0.85, recall_limit=2):
         if not 0 <= rho < 1:
             raise ValueError("rho must be in [0, 1)")
+        if type(recall_limit) is not int or recall_limit < 0:
+            raise ValueError("recall_limit must be a nonnegative integer")
         self.path, self.provider, self.rho = str(database), provider, rho
+        self.recall_limit = recall_limit
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as db:
             db.execute("CREATE TABLE IF NOT EXISTS runtime (id INTEGER PRIMARY KEY CHECK(id=1), profile TEXT NOT NULL, revision INTEGER NOT NULL, state TEXT NOT NULL)")
@@ -210,7 +231,8 @@ class Runtime:
             memory["usage_frequency"] = usage_frequency(memory, state["step"])
         return {"revision": revision, "state": state, "snapshots": names,
                 "traces": traces, "replaced": self.replaced_log(), "mode": self.provider.mode,
-                "rho": self.rho, "profile": self.provider.profile, "usage_window": USAGE_WINDOW}
+                "rho": self.rho, "profile": self.provider.profile, "usage_window": USAGE_WINDOW,
+                "recall_limit": self.recall_limit, "recall_k": RECALL_K}
 
     def retrieve(self, text, enabled=True):
         text = require_text(text, "input", 2000)
@@ -218,6 +240,14 @@ class Runtime:
         query = self._embed(text, self.dimension(state), "query")
         return rank(state["memories"], query, state["emotion"], enabled,
                     step=state["step"])
+
+    def _recall(self, memories, text, emotion, enabled, seen, dimension):
+        """Second retrieval on the model's own wording: same ranking, same emotion, wider slice.
+        Everything it returns joins the context, so top_k is left at zero and applied here."""
+        query = self._embed(text, dimension, "query")
+        rows = rank(memories, query, emotion, enabled, top_k=0)
+        return [{**row, "selected": True, "selected_by": "recall"}
+                for row in rows if row["id"] not in seen][:RECALL_K]
 
     def step(self, text=None, enabled=True):
         # None is a clock tick with no new external input.
@@ -230,7 +260,27 @@ class Runtime:
         before = copy.deepcopy(state["emotion"])
         rows = rank(state["memories"], query, before, enabled, step=state["step"])
         selected = [row for row in rows if row["selected"]]
-        result = validate_cognition(self.provider.cognize(text, copy.deepcopy(selected)), selected)
+        # The model may ask to look again before answering, in its own words. What a recall
+        # surfaces joins the context, so it can be cited and replaced: that is the point of
+        # asking. The budget bounds the cost; asking past it is an error, not a retry.
+        recalls, budget = [], self.recall_limit
+        while True:
+            candidate = self.provider.cognize(text, copy.deepcopy(selected), budget,
+                                              library_size=len(state["memories"]))
+            wanted = recall_request(candidate, budget)
+            if wanted is None:
+                result = candidate
+                break
+            extra = self._recall(state["memories"], wanted, before, enabled,
+                                 {row["id"] for row in selected}, dimension)
+            recalls.append({"query": wanted, "rows": extra})
+            if extra:
+                selected = selected + extra
+                budget -= 1
+            else:
+                # Nothing new left to find; another request would only spend a call.
+                budget = 0
+        result = validate_cognition(result, selected)
         feeling = self._embed(result["appraisal"], dimension)
         dimension = len(feeling)
         after = feeling if before is None else [self.rho * a + (1 - self.rho) * b for a, b in zip(before, feeling)]
@@ -265,9 +315,9 @@ class Runtime:
         state["memories"].extend(prepared)
         state.update(emotion=after, appraisal=result["appraisal"], step=state["step"] + 1)
         trace = {"step": state["step"], "input": text, "enabled": enabled,
-                 "usage_window": USAGE_WINDOW,
+                 "usage_window": USAGE_WINDOW, "recall_limit": self.recall_limit,
                  "emotion_before": before, "emotion_after": after, "rho": self.rho,
-                 "retrieval": rows, "cognition": result,
+                 "retrieval": rows, "recalls": recalls, "cognition": result,
                  "written_ids": [m["id"] for m in prepared],
                  "replaced_ids": [m["id"] for m in replaced], "mode": self.provider.mode}
         self._commit(revision, state, trace, replaced=replaced)
@@ -311,12 +361,14 @@ class Runtime:
                     raise ValueError("Choose snapshots with an initialized emotion")
                 rows = rank(common["memories"], query, emotion, enabled, step=common["step"])
                 selected = [row for row in rows if row["selected"]]
-                result = validate_cognition(self.provider.cognize(text, copy.deepcopy(selected)), selected)
+                result = validate_cognition(self.provider.cognize(
+                    text, copy.deepcopy(selected), library_size=len(common["memories"])), selected)
                 trials.append({"label": label, "snapshot": name, "enabled": enabled,
                                "emotion": emotion, "retrieval": rows, "cognition": result})
         return {"input": text, "baseline": baseline, "memory_ids": [m["id"] for m in common["memories"]],
                 "trials": trials, "mode": self.provider.mode, "usage_window": USAGE_WINDOW,
-                "note": "Only the emotion-to-read gate is ablated; historical write strengths stay fixed."}
+                "note": "Only the emotion-to-read gate is ablated; historical write strengths stay fixed. "
+                        "Trials use the fixed three-memory context, so a recall cannot widen one arm only."}
 
     def seed(self):
         revision, state = self.load()

@@ -10,6 +10,8 @@ def main():
     parser.add_argument("--mode", choices=("offline", "api"), default="offline")
     parser.add_argument("--db", default="data/runtime.sqlite3")
     parser.add_argument("--rho", type=float, default=0.85)
+    parser.add_argument("--recall-limit", type=int, default=2,
+                        help="Model-initiated extra retrievals per round (0 disables recall)")
     sub = parser.add_subparsers(dest="command", required=True)
     serve = sub.add_parser("serve", help="Open the local dashboard")
     serve.add_argument("--port", type=int, default=8765)
@@ -29,7 +31,8 @@ def main():
     compare.add_argument("--b", default="B")
     args = parser.parse_args()
     try:
-        runtime = Runtime(args.db, APIProvider() if args.mode == "api" else OfflineProvider(), args.rho)
+        runtime = Runtime(args.db, APIProvider() if args.mode == "api" else OfflineProvider(),
+                          args.rho, args.recall_limit)
         if args.command == "serve":
             from .server import serve
             serve(runtime, args.port, args.interval)

@@ -137,6 +137,13 @@ class RuntimeTests(unittest.TestCase):
                         self.runtime.step("输入")
                 self.assertEqual(before, self.database_dump())
 
+    def test_compare_rejects_a_non_object_cognition(self):
+        # The step path screens the recall request first, so this guard is reached by compare.
+        self.runtime.seed()
+        with patch.object(self.provider, "cognize", return_value=["not", "a", "dict"]):
+            with self.assertRaises(ValueError):
+                self.runtime.compare("合作", "baseline", "A", "B")
+
     def test_invalid_inputs_and_missing_snapshots_are_rejected(self):
         self.runtime.save("light")
         self.runtime.seed()
@@ -256,12 +263,22 @@ class APIAdapterTests(unittest.TestCase):
             self.provider.cognize("当前输入", [memory])
         payload = request.call_args.args[1]
         user = json.loads(payload["messages"][1]["content"])
-        self.assertEqual(user, {"input": "当前输入", "memories": [{
+        self.assertEqual(user, {"input": "当前输入", "recall_left": 0, "memories": [{
             "id": 1, "content": "可见内容", "created_step": None, "origin": "unknown",
             "source_memory_ids": [], "replaces": []}]})
         self.assertEqual(request.call_args.args[2], {"Authorization": "Bearer chat-secret"})
         self.assertNotIn("chat-secret", self.provider.profile)
         self.assertNotIn("embed-secret", self.provider.profile)
+
+    def test_prompt_reports_library_size_so_a_partial_context_is_visible(self):
+        # Three memories with no total read as the whole library; then there is never a
+        # reason to ask for more, which is exactly what the first live run did.
+        response = {"choices": [{"message": {"content": json.dumps(
+            {"answer": "ok", "appraisal": "平静"})}}]}
+        with patch("agent_runtime.providers._request", return_value=response) as request:
+            self.provider.cognize("输入", [], 2, library_size=9)
+        user = json.loads(request.call_args.args[1]["messages"][1]["content"])
+        self.assertEqual((user["recall_left"], user["library_size"]), (2, 9))
 
     def test_malformed_provider_output_is_rejected(self):
         with patch("agent_runtime.providers._request", return_value={"choices": [{"message": {"content": "not JSON"}}]}):
