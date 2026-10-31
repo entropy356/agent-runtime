@@ -1,12 +1,12 @@
-# Demo 1：Emotion-guided Memory Retrieval
+# Demo 1：Emotion 与 Memory 的相互作用
 
-验证一条窄因果链：
+研究 Emotion 与 Memory 之间的双向作用，而不是单向的「情绪影响检索」：
 
-```text
-Emotion → Memory Retrieval → LLM Context → Response
-```
+- Emotion 通过 `read_i` 决定哪些记忆进入上下文；
+- Emotion 通过 `write_strength` 决定新记忆以后被读到的难易；
+- 被读到的记忆改变认知，认知产生的感受又更新 Emotion。
 
-这个 Demo 只研究 Emotion 对记忆读取的影响，不研究 Emotion 对 Clock 的调节。
+关心的是这个闭环能否产生可观察、可复现的差异，以及差异出在哪一段。Clock 不在范围内。
 
 ## 运行
 
@@ -24,7 +24,13 @@ python -m agent_runtime serve
 
 ## 实验
 
-示例初始化同一个记忆库，并构造两个不同的 Emotion 状态：
+分两层看。
+
+**夹具对照**：固定记忆库和输入，只替换 Emotion，看读取排序是否随之改变。这层回答「`read_i` 是否真的起作用」。
+
+**连续对话**：不设脚本，逐轮输入，让闭环自己跑。看的是检索结果如何进入认知、认知产生的感受如何更新 Emotion、下一轮又检索到什么。这层回答「闭环是否稳定、会不会漂移或退化」。
+
+夹具对照的构造：同一个记忆库，两个不同的 Emotion 状态：
 
 - **A**：偏向“得到支持、愿意再次合作”的经历；
 - **B**：偏向“遭到否定、担心再次受挫”的经历。
@@ -113,7 +119,7 @@ python -m agent_runtime --mode api --db data/api.sqlite3 serve
 
 API 模式用同一个 embedding 空间编码文本记忆、输入和感受描述。这里把语义向量暂时作为 Emotion 空间的实验性近似，并不假设“语义相近”等同于“情绪相近”。
 
-LLM 不直接接收 Emotion 向量；Emotion 对回答的影响只通过记忆检索产生。
+LLM 不直接接收 Emotion 向量，Emotion 对回答的影响经由检索间接产生。
 
 ## 命令行
 
@@ -135,10 +141,13 @@ python -m agent_runtime --help
 
 ## 局限
 
-当前 Demo 只验证机制是否能形成可观察的检索差异。
+这个 Demo 只验证闭环能否形成可观察、可复现的差异，不证明这种差异有用，也不证明它接近人类情绪。
 
-- Emotion 空间仍是实验性近似；
-- 示例 A/B 是人工构造的；
-- 当前读写函数和参数只是暂定实现；
+- Emotion 空间是语义向量的实验性近似；
+- 夹具 A/B 是人工构造的；
+- 使用频次只输出 Cold / Warm / Hot 标记，不参与读写计算；
+- 记忆一旦写入不会被覆盖、合并或失效，过期内容会持续参与检索；
+- `write_strength` 在写入时算定，之后不随使用改变；
+- Emotion 的范数在中心化后不进入任何公式；
 - 离线模式不能验证真实语义效果；
-- 本 Demo 不验证 Emotion 对 Clock 的影响。
+- 不验证 Emotion 对 Clock 的影响。

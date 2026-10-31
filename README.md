@@ -10,9 +10,9 @@
 
 ## 当前 Demo
 
-### Demo 1 — Emotion-guided Memory Retrieval
+### Demo 1 — Emotion 与 Memory 的相互作用
 
-验证 Emotion 如何影响记忆检索。
+观察 Emotion 如何影响记忆的读写，以及被读到的记忆如何反过来改变 Emotion。
 
 ```bash
 cd demos/demo1-emotion-memory
