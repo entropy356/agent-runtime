@@ -117,6 +117,44 @@ class RuntimeTests(unittest.TestCase):
                 self.runtime.step("输入")
         self.assertEqual(before, self.database_dump())
 
+    def test_dot_rejects_mismatched_dimensions(self):
+        with self.assertRaises(ValueError):
+            dot([1.0], [1.0, 0.0])
+
+    def test_cognition_shape_errors_never_commit(self):
+        self.runtime.seed()
+        before = self.database_dump()
+        base = {"answer": "ok", "appraisal": "感受", "used_memory_ids": [], "memories": []}
+        cases = {
+            "not an object": ["not", "a", "dict"],
+            "four proposals": {**base, "memories": [{"content": "a", "appraisal": "b"}] * 4},
+            "proposal is not an object": {**base, "memories": ["text"]},
+        }
+        for label, result in cases.items():
+            with self.subTest(label):
+                with patch.object(self.provider, "cognize", return_value=result):
+                    with self.assertRaises(ValueError):
+                        self.runtime.step("输入")
+                self.assertEqual(before, self.database_dump())
+
+    def test_invalid_inputs_and_missing_snapshots_are_rejected(self):
+        self.runtime.save("light")
+        self.runtime.seed()
+        before = self.database_dump()
+        for text in ("", "   ", 5):
+            with self.subTest(text=text):
+                with self.assertRaises(ValueError):
+                    self.runtime.step(text)
+        self.assertEqual(before, self.database_dump())
+        with self.assertRaises(ValueError):
+            Runtime(self.path, OfflineProvider(), rho=1.0)
+        with self.assertRaises(ValueError):
+            self.runtime.restore("missing")
+        # "light" was saved before the first tick, so it has no emotion to compare with.
+        with self.assertRaises(ValueError):
+            self.runtime.compare("输入", "baseline", "light", "B")
+        self.assertEqual(before, self.database_dump())
+
     def test_late_embedding_failure_never_commits(self):
         self.runtime.seed()
         before = self.database_dump()

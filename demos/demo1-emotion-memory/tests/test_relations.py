@@ -126,3 +126,54 @@ class MemoryRelationTests(unittest.TestCase):
         self.assertEqual(written["origin"], "internal_cognition")
         self.assertEqual(written["source_memory_ids"], trace["cognition"]["used_memory_ids"])
 
+    def test_one_proposal_may_replace_several_memories(self):
+        self.runtime.seed()
+        selected = [r["id"] for r in self.runtime.retrieve("合作") if r["selected"]]
+        merged = {"answer": "合并", "appraisal": "理清了", "used_memory_ids": selected[:2],
+                  "memories": [{"content": "合并后的事实", "appraisal": "清楚了",
+                                "replaces": selected[:2], "source_memory_ids": selected[:2]}]}
+        with patch.object(self.provider, "cognize", return_value=merged):
+            trace = self.runtime.step("合作")
+        state = self.runtime.load()[1]
+        new_id = trace["written_ids"][0]
+        self.assertEqual(state["memories"][-1]["replaces"], selected[:2])
+        for memory in state["memories"]:
+            if memory["id"] in selected[:2]:
+                self.assertEqual(memory["superseded_by"], new_id)
+        self.assertFalse({m["id"] for m in rank(state["memories"], None, None)} & set(selected[:2]))
+
+    def test_two_proposals_may_replace_different_memories_in_one_round(self):
+        self.runtime.seed()
+        selected = [r["id"] for r in self.runtime.retrieve("合作") if r["selected"]]
+        split = {"answer": "分别更新", "appraisal": "整理", "used_memory_ids": selected[:2],
+                 "memories": [{"content": "A 的更新", "appraisal": "甲", "replaces": [selected[0]]},
+                              {"content": "B 的更新", "appraisal": "乙", "replaces": [selected[1]]}]}
+        with patch.object(self.provider, "cognize", return_value=split):
+            trace = self.runtime.step("合作")
+        state = self.runtime.load()[1]
+        by_id = {m["id"]: m for m in state["memories"]}
+        self.assertEqual(by_id[selected[0]]["superseded_by"], trace["written_ids"][0])
+        self.assertEqual(by_id[selected[1]]["superseded_by"], trace["written_ids"][1])
+
+    def test_superseded_memory_keeps_its_usage_history_untouched(self):
+        self.runtime.seed()
+        target = self.runtime.retrieve("合作")[0]["id"]
+        cited = {"answer": "收到", "appraisal": "继续认知", "used_memory_ids": [target],
+                 "memories": []}
+        with patch.object(self.provider, "cognize", return_value=cited):
+            for _ in range(8):
+                self.runtime.step("合作")
+        find = lambda: next(m for m in self.runtime.inspect()["state"]["memories"]
+                            if m["id"] == target)
+        self.assertEqual(find()["tier"], "Hot")
+        with patch.object(self.provider, "cognize", return_value=self.proposal(target)):
+            self.runtime.step("合作")
+        history = list(find()["recent_uses"])
+        quiet = {"answer": "好", "appraisal": "平静", "used_memory_ids": [], "memories": []}
+        with patch.object(self.provider, "cognize", return_value=quiet):
+            for _ in range(20):
+                self.runtime.step("合作")
+        self.assertEqual(find()["recent_uses"], history)
+        self.assertEqual(find()["uses"], len(history))
+        self.assertEqual(find()["tier"], "Cold")
+

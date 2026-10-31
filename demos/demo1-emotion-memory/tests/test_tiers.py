@@ -3,7 +3,7 @@ import unittest
 from unittest.mock import patch
 
 from agent_runtime.providers import OfflineProvider
-from agent_runtime.runtime import Runtime, rank, tier, usage_frequency
+from agent_runtime.runtime import USAGE_WINDOW, Runtime, rank, tier, usage_frequency
 from tests import test_runtime as fixtures
 
 
@@ -14,6 +14,37 @@ class TierSelectionTests(unittest.TestCase):
                 for i, recent, strength in (
                     (1, list(range(9, 17)), .9), (2, list(range(9, 17)), .8),
                     (3, [15, 16], .3), (4, [], .1))]
+
+    def test_quota_outranks_score_at_small_budgets(self):
+        # Hot is the lowest-scoring row here: a quota that survives only when it also
+        # wins on score would not be a quota.
+        memories = [{"id": 1, "vector": [1., 0.], "affect": [1., 0.], "uses": 0,
+                     "recent_uses": list(range(9, 17)), "write_strength": .05},
+                    {"id": 2, "vector": [1., 0.], "affect": [1., 0.], "uses": 0,
+                     "recent_uses": [15, 16], "write_strength": .9},
+                    {"id": 3, "vector": [1., 0.], "affect": [1., 0.], "uses": 0,
+                     "recent_uses": [], "write_strength": .8}]
+        chosen = lambda k: sorted(r["id"] for r in
+                                  rank(memories, None, None, step=16, top_k=k) if r["selected"])
+        self.assertEqual(chosen(1), [1])
+        self.assertEqual(chosen(2), [1, 2])
+        self.assertEqual(chosen(3), [1, 2, 3])
+
+    def test_quota_picks_the_highest_score_inside_a_tier(self):
+        memories = [{"id": 1, "vector": [1., 0.], "affect": [1., 0.], "uses": 0,
+                     "recent_uses": list(range(9, 17)), "write_strength": .05},
+                    {"id": 2, "vector": [1., 0.], "affect": [1., 0.], "uses": 0,
+                     "recent_uses": list(range(1, 9)), "write_strength": .07},
+                    {"id": 3, "vector": [1., 0.], "affect": [1., 0.], "uses": 0,
+                     "recent_uses": [], "write_strength": .99}]
+        rows = rank(memories, None, None, step=16, top_k=1)
+        self.assertEqual([r["id"] for r in rows if r["selected"]], [2])
+
+    def test_rank_rejects_non_integer_budgets(self):
+        for bad in (-1, True, 1.0, "3", None):
+            with self.subTest(top_k=bad):
+                with self.assertRaises(ValueError):
+                    rank([], None, None, top_k=bad)
 
     def test_layers_change_context_without_changing_scores(self):
         memories = self.memories()
@@ -121,3 +152,12 @@ class TierLifecycleTests(unittest.TestCase):
         project = lambda t: [(r["id"], r["score"], r["tier"], r["selected"])
                              for r in t["retrieval"]]
         self.assertEqual(project(off_a), project(off_b))
+
+    def test_step_trace_records_the_tier_configuration_used(self):
+        self.runtime.seed()
+        trace = self.runtime.step("合作", tiered=False)
+        self.assertFalse(trace["tiered"])
+        self.assertEqual(trace["usage_window"], USAGE_WINDOW)
+        selected = [r for r in trace["retrieval"] if r["selected"]]
+        self.assertEqual(len(selected), 3)
+        self.assertTrue(all(r["selected_by"] == "score_only" for r in selected))
