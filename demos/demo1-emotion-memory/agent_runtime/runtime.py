@@ -108,8 +108,9 @@ class Runtime:
             for name, snapshot in (snapshots or {}).items():
                 db.execute("INSERT INTO snapshots VALUES (?, ?)", (name, json.dumps(snapshot, ensure_ascii=False)))
 
-    def _embed(self, text, dimension=None):
-        vector = unit(self.provider.embed(text))
+    def _embed(self, text, dimension=None, task=None):
+        # task lets asymmetric candidates (Gemini) separate query from document space.
+        vector = unit(self.provider.embed(text, task))
         if dimension is not None and len(vector) != dimension:
             raise ValueError("Embedding dimensions changed; state was not changed")
         return vector
@@ -136,7 +137,7 @@ class Runtime:
     def retrieve(self, text, enabled=True):
         text = require_text(text, "input", 2000)
         _, state = self.load()
-        query = self._embed(text, self.dimension(state))
+        query = self._embed(text, self.dimension(state), "query")
         return rank(state["memories"], query, state["emotion"], enabled)
 
     def step(self, text=None, enabled=True):
@@ -145,7 +146,7 @@ class Runtime:
             text = require_text(text, "input", 2000)
         revision, state = self.load()
         dimension = self.dimension(state)
-        query = self._embed(text, dimension) if text is not None else None
+        query = self._embed(text, dimension, "query") if text is not None else None
         dimension = len(query) if query is not None else dimension
         before = copy.deepcopy(state["emotion"])
         rows = rank(state["memories"], query, before, enabled)
@@ -158,7 +159,7 @@ class Runtime:
         prepared = []
         for proposal in result["memories"]:
             affect = self._embed(proposal["appraisal"], dimension)
-            prepared.append({**proposal, "vector": self._embed(proposal["content"], dimension),
+            prepared.append({**proposal, "vector": self._embed(proposal["content"], dimension, "document"),
                              "affect": affect, "write_strength": sigmoid(3 * dot(after, affect)), "uses": 0})
         for memory in state["memories"]:
             if memory["id"] in result["used_memory_ids"]:
@@ -196,7 +197,7 @@ class Runtime:
         """Four read-only trials: fixed memories/input, only E and retrieval gate vary."""
         text = require_text(text, "input", 2000)
         common = self.snapshot(baseline)
-        query = self._embed(text, self.dimension(common))
+        query = self._embed(text, self.dimension(common), "query")
         trials = []
         for enabled in (True, False):
             for label, name in (("A", a), ("B", b)):
@@ -226,7 +227,7 @@ class Runtime:
         ]
         dimension = None
         for content, appraisal in contents:
-            vector = self._embed(content, dimension)
+            vector = self._embed(content, dimension, "document")
             dimension = len(vector)
             state["memories"].append({"id": state["next_id"], "content": content,
                 "appraisal": appraisal, "vector": vector, "affect": self._embed(appraisal, dimension),

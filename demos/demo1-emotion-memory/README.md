@@ -59,22 +59,34 @@ python -m agent_runtime --db data/another.sqlite3 --rho 0.85 serve --port 8766 -
 
 **offline** 使用 256 维、SHA-256 稳定哈希的字符二元组向量；相似度主要反映文字重合，不具备语义理解。认知使用确定性模板，回答参考检索第一名，并显式引用其 ID。它只验证工程链路，不能评价真实对话表现。
 
-**api** 接入同时支持 `/embeddings` 和 `/chat/completions` 的 HTTPS JSON API。基础地址包含服务所需前缀（例如 `/v1`），不要包含端点名。聊天模型需要遵守文档中的 JSON 协议；不支持该协议时会报错，不会偷偷退回离线模式。
+**api** 允许认知模型与嵌入模型来自不同服务商：两侧各有基础地址、密钥和协议，代理也可以只加在其中一侧。协议固定为 HTTPS。
 
 在本地 shell 设置：
 
 ```bash
-export AGENT_API_BASE='https://your-provider.example/v1'
+# 认知：任意 OpenAI 兼容的 /chat/completions
+export AGENT_CHAT_BASE='https://your-llm.example/v1'
+export AGENT_CHAT_KEY='...'
 export AGENT_CHAT_MODEL='your-chat-model'
-export AGENT_EMBEDDING_MODEL='your-embedding-model'
-read -rsp 'API key: ' AGENT_API_KEY; echo
-export AGENT_API_KEY
+
+# 嵌入：openai（/embeddings）或 gemini（:embedContent）
+export AGENT_EMBED_PROTOCOL='gemini'
+export AGENT_EMBED_BASE='https://your-embedding.example/v1beta'
+export AGENT_EMBED_KEY='...'
+export AGENT_EMBED_MODEL='gemini-embedding-001'
+export AGENT_EMBED_DIMENSIONS='768'
+export AGENT_EMBED_PROXY='http://127.0.0.1:1081'   # 可选，仅嵌入侧走代理
+
 python -m agent_runtime --mode api --db data/api.sqlite3 serve
 ```
 
-程序不自动读取 `.env`。密钥只来自环境变量，不进入网页、数据库或错误正文。不同 provider、基础地址或 embedding 模型必须使用不同数据库；向量维度改变也会拒绝提交。**同名模型在服务端被替换、但维度不变，无法自动检测**，此时也应新建数据库。
+`AGENT_EMBED_BASE`、`AGENT_EMBED_KEY`、`AGENT_EMBED_MODEL` 省略时回落到 `AGENT_CHAT_*`；旧变量 `AGENT_API_BASE`、`AGENT_API_KEY` 仍可替代 `AGENT_CHAT_*` 使用，此时就是单端点模式。
 
-API 模式用同一 embedding 模型分别编码记忆内容、当前输入以及自由文本感受。感受描述的语义空间只是情绪空间的实验性近似；语义相近不必然等于情绪相近。
+程序不自动读取 `.env`。密钥只来自环境变量，不进入网页、数据库或错误正文。**数据库绑定的是嵌入身份（协议、模型、维度），不是聊天模型**：换聊天模型可以直接复用数据库，换嵌入模型或维度必须新建。同名模型在服务端被替换、但维度不变，无法自动检测，此时也应新建数据库。
+
+认知请求会带 `response_format: json_object`；网关不支持该参数（400/404/422/501）时自动降级为纯提示约束。免费额度常见全局限流，遇到 429/5xx 会按 5、15、30、45 秒退避重试。
+
+API 模式用同一嵌入模型编码三类文本：记忆内容标为 `RETRIEVAL_DOCUMENT`，当前输入标为 `RETRIEVAL_QUERY`，感受描述用对称任务。Gemini 的 `embedding-001` 在指定维度（如 768）时输出未归一化，程序统一做了 L2 归一化。感受描述的语义空间只是情绪空间的实验性近似；语义相近不必然等于情绪相近。
 
 认知提示只包含固定系统指令、当前输入、检索出的记忆 ID 与内容。**不传入 Emotion 向量、情绪描述或完整聊天历史**，使当前情绪对回答的作用经由检索产生。认知同时返回简短主观感受、引用 ID 和最多三条待保存记忆；不要求输出内部推理过程。
 

@@ -97,12 +97,12 @@ class RuntimeTests(unittest.TestCase):
         before = self.database_dump()
         original = self.provider.embed
         calls = 0
-        def fail_late(text):
+        def fail_late(text, task=None):
             nonlocal calls
             calls += 1
             if calls == 4:
                 raise ValueError("network failed on proposed memory content")
-            return original(text)
+            return original(text, task)
         with patch.object(self.provider, "embed", side_effect=fail_late):
             with self.assertRaises(ValueError):
                 self.runtime.step("输入")
@@ -159,10 +159,16 @@ class RuntimeTests(unittest.TestCase):
 
 
 class APIAdapterTests(unittest.TestCase):
+    """Chat and embedding may come from different vendors, protocols and keys."""
+
     def setUp(self):
         self.env = patch.dict("os.environ", {
-            "AGENT_API_BASE": "https://example.invalid/v1", "AGENT_API_KEY": "test-secret",
-            "AGENT_CHAT_MODEL": "chat", "AGENT_EMBEDDING_MODEL": "embedding"})
+            "AGENT_API_BASE": "", "AGENT_API_KEY": "", "AGENT_EMBEDDING_MODEL": "",
+            "AGENT_CHAT_BASE": "https://chat.invalid/v1", "AGENT_CHAT_KEY": "chat-secret",
+            "AGENT_CHAT_MODEL": "chat-model",
+            "AGENT_EMBED_PROTOCOL": "openai", "AGENT_EMBED_BASE": "https://embed.invalid/v1",
+            "AGENT_EMBED_KEY": "embed-secret", "AGENT_EMBED_MODEL": "embed-model",
+            "AGENT_EMBED_DIMENSIONS": "768"})
         self.env.start()
         self.addCleanup(self.env.stop)
         self.provider = APIProvider()
@@ -170,21 +176,49 @@ class APIAdapterTests(unittest.TestCase):
     def test_cognition_prompt_does_not_leak_emotion_or_full_history(self):
         memory = {"id": 1, "content": "可见内容", "appraisal": "不应进入提示", "affect": [1234]}
         response = {"choices": [{"message": {"content": json.dumps({"answer": "ok"})}}]}
-        with patch.object(self.provider, "_post", return_value=response) as post:
+        with patch("agent_runtime.providers._request", return_value=response) as request:
             self.provider.cognize("当前输入", [memory])
-        payload = post.call_args.args[1]
+        payload = request.call_args.args[1]
         user = json.loads(payload["messages"][1]["content"])
         self.assertEqual(user, {"input": "当前输入", "memories": [{"id": 1, "content": "可见内容"}]})
-        self.assertNotIn("test-secret", self.provider.profile)
+        self.assertEqual(request.call_args.args[2], {"Authorization": "Bearer chat-secret"})
+        self.assertNotIn("chat-secret", self.provider.profile)
+        self.assertNotIn("embed-secret", self.provider.profile)
 
     def test_malformed_provider_output_is_rejected(self):
-        with patch.object(self.provider, "_post", return_value={"choices": [{"message": {"content": "not JSON"}}]}):
+        with patch("agent_runtime.providers._request", return_value={"choices": [{"message": {"content": "not JSON"}}]}):
             with self.assertRaises(ValueError):
                 self.provider.cognize("输入", [])
 
+    def test_cognition_recovers_fenced_json(self):
+        fenced = '```json\n{"answer": "ok"}\n```'
+        with patch("agent_runtime.providers._request", return_value={"choices": [{"message": {"content": fenced}}]}):
+            self.assertEqual(self.provider.cognize("输入", []), {"answer": "ok"})
+
     def test_embedding_response_normalized_and_validated(self):
-        with patch.object(self.provider, "_post", return_value={"data": [{"embedding": [3, 4]}]}):
+        with patch("agent_runtime.providers._request", return_value={"data": [{"embedding": [3, 4]}]}) as request:
             self.assertEqual(self.provider.embed("输入"), [.6, .8])
+        self.assertEqual(request.call_args.args[0], "https://embed.invalid/v1/embeddings")
+        self.assertEqual(request.call_args.args[1]["dimensions"], 768)
+
+    def test_gemini_protocol_uses_native_endpoint_and_task_type(self):
+        with patch.dict("os.environ", {"AGENT_EMBED_PROTOCOL": "gemini",
+                                       "AGENT_EMBED_BASE": "https://gemini.invalid/v1beta",
+                                       "AGENT_EMBED_MODEL": "gemini-embedding-001"}):
+            provider = APIProvider()
+        with patch("agent_runtime.providers._request",
+                   return_value={"embedding": {"values": [0, 5]}}) as request:
+            self.assertEqual(provider.embed("文档", "document"), [0.0, 1.0])
+        url, payload, headers = request.call_args.args[:3]
+        self.assertEqual(url, "https://gemini.invalid/v1beta/models/gemini-embedding-001:embedContent")
+        self.assertEqual(payload["taskType"], "RETRIEVAL_DOCUMENT")
+        self.assertEqual(payload["outputDimensionality"], 768)
+        self.assertEqual(headers, {"x-goog-api-key": "embed-secret"})
+        self.assertIn("gemini:gemini-embedding-001:768", provider.profile)
+
+    def test_profile_tracks_embedding_not_chat_model(self):
+        with patch.dict("os.environ", {"AGENT_CHAT_MODEL": "another-chat"}):
+            self.assertEqual(APIProvider().profile, self.provider.profile)
 
 
 if __name__ == "__main__":
