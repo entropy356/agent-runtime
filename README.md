@@ -1,30 +1,22 @@
 # Agent Runtime
 
-一个探索具有持续内部状态的 Agent Runtime 的实验项目。
+一个探索持续内部状态的 Agent Runtime 实验项目。
 
-## 项目愿景
-
-- [信息化历史](docs/vision.md)
-
-## 设计
+## 文档
 
 - [核心设计](docs/design.md)
+- [项目愿景](docs/vision.md)
+- [Demo 规则](docs/demos.md)
 
-## Demos
-
-- [Demo 的组织与演化](docs/demos.md)
+## 当前 Demo
 
 ### Demo 1 — Emotion-guided Memory Retrieval
 
-验证情绪向量如何影响记忆检索。
-
-- [实验说明与运行方式](demos/demo1-emotion-memory/README.md)
-
-运行（Python 3.10+，离线模式无需额外依赖）：
+验证 Emotion 如何影响记忆检索。
 
 ```bash
 cd demos/demo1-emotion-memory
 python -m agent_runtime serve
 ```
 
-每个 Demo 都是独立实验，拥有自己的实现、说明和测试。
+Python 3.10+；离线模式无需额外依赖。详见 [Demo 说明](demos/demo1-emotion-memory/README.md)。
