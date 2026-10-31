@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 from tests import test_runtime as fixtures
 from agent_runtime.providers import OfflineProvider
-from agent_runtime.runtime import Runtime, rank
+from agent_runtime.runtime import Runtime
 
 
 class MemoryRelationTests(unittest.TestCase):
@@ -21,24 +21,26 @@ class MemoryRelationTests(unittest.TestCase):
         self.runtime.seed()
         return self.runtime.retrieve("合作")[0]["id"]
 
-    def test_replacement_keeps_old_record_but_excludes_it_from_ranking_and_mean(self):
-        target = self.target()
+    def test_replacement_removes_the_old_memory_and_keeps_only_a_debug_copy(self):
+        self.runtime.seed()
+        _, before = self.runtime.load()
+        target = self.runtime.retrieve("合作")[0]["id"]
+        content = next(m["content"] for m in before["memories"] if m["id"] == target)
         with patch.object(self.provider, "cognize", return_value=self.proposal(target)):
             trace = self.runtime.step("合作")
         _, state = self.runtime.load()
         replacement = state["memories"][-1]
-        old = next(m for m in state["memories"] if m["id"] == target)
-        self.assertEqual(old["superseded_by"], replacement["id"])
+        self.assertEqual([m["id"] for m in state["memories"]],
+                         [m["id"] for m in before["memories"] if m["id"] != target]
+                         + [replacement["id"]])
+        self.assertFalse(any("superseded_by" in m for m in state["memories"]))
+        self.assertEqual(trace["replaced_ids"], [target])
         self.assertEqual(replacement["replaces"], [target])
         self.assertEqual(replacement["source_memory_ids"], [target])
-        self.assertEqual(old["uses"], 1)
         self.assertEqual(replacement["created_step"], trace["step"])
-        self.assertEqual(replacement["created_revision"], self.runtime.load()[0])
-        query = self.provider.embed("合作")
-        actual = rank(state["memories"], query, state["emotion"])
-        active = [m for m in state["memories"] if m["id"] != target]
-        self.assertEqual(actual, rank(active, query, state["emotion"]))
-        self.assertNotIn(target, [m["id"] for m in actual])
+        log = self.runtime.replaced_log()
+        self.assertEqual([(r["id"], r["replaced_by"], r["content"]) for r in log],
+                         [(target, replacement["id"], content)])
 
     def test_relations_require_visible_ids_and_integer_lists(self):
         target = self.target()
@@ -70,8 +72,9 @@ class MemoryRelationTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.runtime.step("合作")
         self.assertEqual(before, self.database_dump())
+        self.assertEqual(self.runtime.replaced_log(), [])
 
-    def test_failed_embedding_does_not_supersede_old_memory(self):
+    def test_failed_embedding_does_not_remove_the_old_memory(self):
         target = self.target()
         before = self.database_dump()
         original = self.provider.embed
@@ -86,12 +89,12 @@ class MemoryRelationTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.runtime.step("合作")
         self.assertEqual(before, self.database_dump())
+        self.assertEqual(self.runtime.replaced_log(), [])
 
     def test_old_state_and_snapshots_need_no_migration(self):
         self.runtime.seed()
         revision, state = self.runtime.load()
-        fields = ("created_step", "created_revision", "origin", "source_memory_ids",
-                  "replaces", "superseded_by")
+        fields = ("created_step", "created_revision", "origin", "source_memory_ids", "replaces")
         for memory in state["memories"]:
             for field in fields:
                 memory.pop(field)
@@ -106,16 +109,17 @@ class MemoryRelationTests(unittest.TestCase):
         self.assertEqual(written["source_memory_ids"], [])
         self.assertEqual(written["origin"], "external_input")
 
-    def test_restore_and_restart_preserve_relation_state(self):
+    def test_restore_brings_back_a_replaced_memory(self):
         target = self.target()
         self.runtime.save("before-correction")
         with patch.object(self.provider, "cognize", return_value=self.proposal(target)):
             self.runtime.step("合作")
         self.runtime.save("after-correction")
         corrected = self.runtime.load()[1]
+        self.assertNotIn(target, [m["id"] for m in corrected["memories"]])
         self.assertEqual(Runtime(self.path, OfflineProvider()).load()[1], corrected)
         self.runtime.restore("before-correction")
-        self.assertIn(target, [m["id"] for m in self.runtime.retrieve("合作")])
+        self.assertIn(target, [m["id"] for m in self.runtime.load()[1]["memories"]])
         self.runtime.restore("after-correction")
         self.assertEqual(self.runtime.load()[1], corrected)
 
@@ -137,10 +141,9 @@ class MemoryRelationTests(unittest.TestCase):
         state = self.runtime.load()[1]
         new_id = trace["written_ids"][0]
         self.assertEqual(state["memories"][-1]["replaces"], selected[:2])
-        for memory in state["memories"]:
-            if memory["id"] in selected[:2]:
-                self.assertEqual(memory["superseded_by"], new_id)
-        self.assertFalse({m["id"] for m in rank(state["memories"], None, None)} & set(selected[:2]))
+        self.assertFalse({m["id"] for m in state["memories"]} & set(selected[:2]))
+        self.assertEqual(sorted(r["id"] for r in self.runtime.replaced_log()), sorted(selected[:2]))
+        self.assertTrue(all(r["replaced_by"] == new_id for r in self.runtime.replaced_log()))
 
     def test_two_proposals_may_replace_different_memories_in_one_round(self):
         self.runtime.seed()
@@ -150,30 +153,46 @@ class MemoryRelationTests(unittest.TestCase):
                               {"content": "B 的更新", "appraisal": "乙", "replaces": [selected[1]]}]}
         with patch.object(self.provider, "cognize", return_value=split):
             trace = self.runtime.step("合作")
-        state = self.runtime.load()[1]
-        by_id = {m["id"]: m for m in state["memories"]}
-        self.assertEqual(by_id[selected[0]]["superseded_by"], trace["written_ids"][0])
-        self.assertEqual(by_id[selected[1]]["superseded_by"], trace["written_ids"][1])
+        ids = {m["id"] for m in self.runtime.load()[1]["memories"]}
+        self.assertFalse(ids & set(selected[:2]))
+        pairs = {r["id"]: r["replaced_by"] for r in self.runtime.replaced_log()}
+        self.assertEqual(pairs, {selected[0]: trace["written_ids"][0],
+                                 selected[1]: trace["written_ids"][1]})
 
-    def test_superseded_memory_keeps_its_usage_history_untouched(self):
+    def test_a_replaced_memory_never_returns_in_later_rounds(self):
         self.runtime.seed()
         target = self.runtime.retrieve("合作")[0]["id"]
-        cited = {"answer": "收到", "appraisal": "继续认知", "used_memory_ids": [target],
-                 "memories": []}
-        with patch.object(self.provider, "cognize", return_value=cited):
-            for _ in range(8):
-                self.runtime.step("合作")
-        find = lambda: next(m for m in self.runtime.inspect()["state"]["memories"]
-                            if m["id"] == target)
-        self.assertEqual(find()["tier"], "Hot")
         with patch.object(self.provider, "cognize", return_value=self.proposal(target)):
             self.runtime.step("合作")
-        history = list(find()["recent_uses"])
         quiet = {"answer": "好", "appraisal": "平静", "used_memory_ids": [], "memories": []}
         with patch.object(self.provider, "cognize", return_value=quiet):
             for _ in range(20):
-                self.runtime.step("合作")
-        self.assertEqual(find()["recent_uses"], history)
-        self.assertEqual(find()["uses"], len(history))
-        self.assertEqual(find()["tier"], "Cold")
+                trace = self.runtime.step("合作")
+        self.assertNotIn(target, [r["id"] for r in trace["retrieval"]])
+        self.assertNotIn(target, [r["id"] for r in self.runtime.retrieve("合作")])
+        self.assertEqual(len(self.runtime.replaced_log()), 1)
 
+    def test_opening_a_database_with_tombstones_moves_them_out(self):
+        self.runtime.seed()
+        revision, state = self.runtime.load()
+        state["memories"][0]["superseded_by"] = state["memories"][1]["id"]
+        self.runtime._commit(revision, state)
+        reopened = Runtime(self.path, OfflineProvider())
+        self.assertNotIn(state["memories"][0]["id"],
+                         [m["id"] for m in reopened.load()[1]["memories"]])
+        self.assertEqual([(r["id"], r["replaced_by"]) for r in reopened.replaced_log()],
+                         [(state["memories"][0]["id"], state["memories"][1]["id"])])
+
+    def test_a_legacy_snapshot_cannot_resurrect_a_removed_memory(self):
+        self.runtime.seed()
+        revision, state = self.runtime.load()
+        legacy = copy.deepcopy(state)
+        legacy["memories"][0]["superseded_by"] = legacy["memories"][1]["id"]
+        self.runtime._commit(revision, legacy, snapshots={"legacy": legacy})
+        comparison = self.runtime.compare("合作", "legacy", "A", "B")
+        self.assertNotIn(legacy["memories"][0]["id"],
+                         [r["id"] for t in comparison["trials"] for r in t["retrieval"]])
+        self.runtime.restore("legacy")
+        self.assertNotIn(legacy["memories"][0]["id"],
+                         [m["id"] for m in self.runtime.load()[1]["memories"]])
+        self.assertEqual(self.runtime.replaced_log()[0]["id"], legacy["memories"][0]["id"])

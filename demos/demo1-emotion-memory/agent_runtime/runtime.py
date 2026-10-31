@@ -23,32 +23,11 @@ USAGE_WINDOW = 16
 
 
 def usage_frequency(memory, step):
-    """Cited rounds / fixed window, never wall-clock time or lifetime count.
-    Missing history is unknown and starts cold; cumulative uses cannot date it."""
+    """Observation only: cited rounds / fixed window, never wall-clock time.
+    Missing history is unknown and starts cold; cumulative uses cannot date it.
+    Nothing in ranking reads this value."""
     return len({s for s in memory.get("recent_uses", [])
                 if step - USAGE_WINDOW < s <= step}) / USAGE_WINDOW
-
-
-def tier(frequency):
-    return "Hot" if frequency >= .5 else "Warm" if frequency >= .125 else "Cold"
-
-
-def select_tiers(rows, top_k):
-    """Reserve one place per populated tier, then fill by unchanged score.
-    At budgets below three, Hot then Warm then Cold get the limited places."""
-    chosen = {}
-    for name in ("Hot", "Warm", "Cold"):
-        if len(chosen) >= top_k:
-            break
-        winner = next((row for row in rows if row["tier"] == name), None)
-        if winner is not None:
-            chosen[winner["id"]] = "tier_quota"
-    for row in rows:
-        if len(chosen) >= top_k:
-            break
-        if row["id"] not in chosen:
-            chosen[row["id"]] = "score_fill"
-    return chosen
 
 
 def require_text(value, field, maximum=6000):
@@ -81,12 +60,12 @@ def centered(vector, mean):
     return [value / norm for value in residual]
 
 
-def rank(memories, query, emotion, enabled=True, top_k=3, step=0, tiered=True):
+def rank(memories, query, emotion, enabled=True, top_k=3, step=0):
     """No mutations. Return all score components and a deterministic selection.
-    Both sides of each comparison are centered on the library mean first."""
+    Both sides of each comparison are centered on the library mean first.
+    Usage frequency is carried along for inspection; it never affects the order."""
     if type(top_k) is not int or top_k < 0:
         raise ValueError("top_k must be a nonnegative integer")
-    memories = [memory for memory in memories if memory.get("superseded_by") is None]
     mean_vector = centroid([memory["vector"] for memory in memories])
     mean_affect = centroid([memory["affect"] for memory in memories])
     query, emotion = centered(query, mean_vector), centered(emotion, mean_affect)
@@ -99,15 +78,13 @@ def rank(memories, query, emotion, enabled=True, top_k=3, step=0, tiered=True):
         match = dot(emotion, centered(memory["affect"], mean_affect)) if emotion is not None else 0.0
         read = sigmoid(4 * match) if enabled else 0.5
         score = relevance * read * memory["write_strength"]
-        frequency = usage_frequency(memory, step)
-        rows.append({**copy.deepcopy(memory), "tier": tier(frequency), "usage_frequency": frequency,
+        rows.append({**copy.deepcopy(memory), "usage_frequency": usage_frequency(memory, step),
                      "relevance": relevance, "emotion_match": match,
                      "read_strength": read, "score": score})
     rows.sort(key=lambda row: (-row["score"], row["id"]))
-    chosen = select_tiers(rows, top_k) if tiered else {r["id"]: "score_only" for r in rows[:top_k]}
+    chosen = {row["id"] for row in rows[:top_k]}
     for row in rows:
         row["selected"] = row["id"] in chosen
-        row["selected_by"] = chosen.get(row["id"])
     return rows
 
 
@@ -154,10 +131,21 @@ class Runtime:
             db.execute("CREATE TABLE IF NOT EXISTS runtime (id INTEGER PRIMARY KEY CHECK(id=1), profile TEXT NOT NULL, revision INTEGER NOT NULL, state TEXT NOT NULL)")
             db.execute("CREATE TABLE IF NOT EXISTS snapshots (name TEXT PRIMARY KEY, state TEXT NOT NULL)")
             db.execute("CREATE TABLE IF NOT EXISTS rounds (id INTEGER PRIMARY KEY, trace TEXT NOT NULL)")
+            db.execute("CREATE TABLE IF NOT EXISTS replaced (id INTEGER PRIMARY KEY, step INTEGER NOT NULL, revision INTEGER NOT NULL, memory_id INTEGER NOT NULL, replaced_by INTEGER NOT NULL, state TEXT NOT NULL)")
             initial = {"step": 0, "emotion": None, "appraisal": "", "memories": [], "next_id": 1}
             db.execute("INSERT OR IGNORE INTO runtime VALUES (1, ?, 0, ?)", (provider.profile, json.dumps(initial)))
-            if db.execute("SELECT profile FROM runtime").fetchone()[0] != provider.profile:
-                raise ValueError("Embedding provider/model differs from this database; use --db with a new path")
+            revision, raw = db.execute("SELECT revision, state FROM runtime WHERE id=1").fetchone()
+            profile = db.execute("SELECT profile FROM runtime").fetchone()[0]
+            state = json.loads(raw)
+        if profile != provider.profile:
+            raise ValueError("Embedding provider/model differs from this database; use --db with a new path")
+        # Databases written before replacement deleted instead of tombstoning still carry
+        # marked memories. Move them out once, so the runtime holds no superseded entry.
+        legacy = [memory for memory in state["memories"] if memory.get("superseded_by") is not None]
+        if legacy:
+            state["memories"] = [memory for memory in state["memories"]
+                                 if memory.get("superseded_by") is None]
+            self._commit(revision, state, replaced=legacy)
 
     @contextmanager
     def connect(self):
@@ -173,7 +161,7 @@ class Runtime:
             revision, state = db.execute("SELECT revision, state FROM runtime WHERE id=1").fetchone()
         return revision, json.loads(state)
 
-    def _commit(self, revision, state, trace=None, snapshots=None):
+    def _commit(self, revision, state, trace=None, snapshots=None, replaced=None):
         with self.connect() as db:
             changed = db.execute("UPDATE runtime SET revision=revision+1, state=? WHERE id=1 AND revision=?",
                                  (json.dumps(state, ensure_ascii=False, allow_nan=False), revision)).rowcount
@@ -181,6 +169,11 @@ class Runtime:
                 raise ValueError("State changed during this operation; retry against the current state")
             if trace is not None:
                 db.execute("INSERT INTO rounds(trace) VALUES (?)", (json.dumps(trace, ensure_ascii=False, allow_nan=False),))
+            # Debug log only. Nothing reads these rows back into retrieval or cognition.
+            for memory in replaced or []:
+                db.execute("INSERT INTO replaced(step, revision, memory_id, replaced_by, state) VALUES (?,?,?,?,?)",
+                           (state["step"], revision + 1, memory["id"], memory["superseded_by"],
+                            json.dumps(memory, ensure_ascii=False, allow_nan=False)))
             for name, snapshot in (snapshots or {}).items():
                 db.execute("INSERT INTO snapshots VALUES (?, ?)", (name, json.dumps(snapshot, ensure_ascii=False)))
 
@@ -199,6 +192,15 @@ class Runtime:
             return len(state["memories"][0]["vector"])
         return None
 
+    def replaced_log(self, limit=50):
+        """Debug view of memories that left the runtime through replacement."""
+        with self.connect() as db:
+            rows = db.execute("SELECT step, revision, memory_id, replaced_by, state FROM replaced "
+                              "ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        return [{"step": step, "revision": revision, "id": memory_id,
+                 "replaced_by": replaced_by, **json.loads(raw)}
+                for step, revision, memory_id, replaced_by, raw in rows]
+
     def inspect(self):
         revision, state = self.load()
         with self.connect() as db:
@@ -206,19 +208,18 @@ class Runtime:
             traces = [json.loads(row[0]) for row in db.execute("SELECT trace FROM rounds ORDER BY id DESC LIMIT 20")]
         for memory in state["memories"]:
             memory["usage_frequency"] = usage_frequency(memory, state["step"])
-            memory["tier"] = tier(memory["usage_frequency"])
         return {"revision": revision, "state": state, "snapshots": names,
-                "traces": traces, "mode": self.provider.mode, "rho": self.rho,
-                "profile": self.provider.profile, "usage_window": USAGE_WINDOW}
+                "traces": traces, "replaced": self.replaced_log(), "mode": self.provider.mode,
+                "rho": self.rho, "profile": self.provider.profile, "usage_window": USAGE_WINDOW}
 
-    def retrieve(self, text, enabled=True, tiered=True):
+    def retrieve(self, text, enabled=True):
         text = require_text(text, "input", 2000)
         _, state = self.load()
         query = self._embed(text, self.dimension(state), "query")
         return rank(state["memories"], query, state["emotion"], enabled,
-                    step=state["step"], tiered=tiered)
+                    step=state["step"])
 
-    def step(self, text=None, enabled=True, tiered=True):
+    def step(self, text=None, enabled=True):
         # None is a clock tick with no new external input.
         if text is not None:
             text = require_text(text, "input", 2000)
@@ -227,7 +228,7 @@ class Runtime:
         query = self._embed(text, dimension, "query") if text is not None else None
         dimension = len(query) if query is not None else dimension
         before = copy.deepcopy(state["emotion"])
-        rows = rank(state["memories"], query, before, enabled, step=state["step"], tiered=tiered)
+        rows = rank(state["memories"], query, before, enabled, step=state["step"])
         selected = [row for row in rows if row["selected"]]
         result = validate_cognition(self.provider.cognize(text, copy.deepcopy(selected)), selected)
         feeling = self._embed(result["appraisal"], dimension)
@@ -236,8 +237,7 @@ class Runtime:
         # Finish ALL provider calls before changing state. Each memory has its own affect.
         # Write strength compares against the existing affect mean, so a new memory is
         # scored by how much it differs from what is already stored, not by the shared bulk.
-        mean_affect = centroid([memory["affect"] for memory in state["memories"]
-                                if memory.get("superseded_by") is None])
+        mean_affect = centroid([memory["affect"] for memory in state["memories"]])
         prepared = []
         for proposal in result["memories"]:
             affect = self._embed(proposal["appraisal"], dimension)
@@ -246,10 +246,8 @@ class Runtime:
                              "affect": affect, "write_strength": sigmoid(3 * aligned), "uses": 0,
                              "created_step": state["step"] + 1, "created_revision": revision + 1,
                              "origin": "external_input" if text is not None else "internal_cognition",
-                             "superseded_by": None, "recent_uses": []})
+                             "recent_uses": []})
         for memory in state["memories"]:
-            if memory.get("superseded_by") is not None:
-                continue
             memory["recent_uses"] = sorted({s for s in memory.get("recent_uses", [])
                                             if state["step"] + 1 - USAGE_WINDOW < s <= state["step"]})
             if memory["id"] in result["used_memory_ids"]:
@@ -258,17 +256,21 @@ class Runtime:
         for memory in prepared:
             memory["id"] = state["next_id"]
             state["next_id"] += 1
-            for previous in state["memories"]:
-                if previous["id"] in memory["replaces"]:
-                    previous["superseded_by"] = memory["id"]
-            state["memories"].append(memory)
+        # Replacement deletes: the runtime keeps no superseded entry. The removed copy goes
+        # to the debug table only, so it cannot re-enter retrieval through a later snapshot.
+        replaced_by = {old: new["id"] for new in prepared for old in new["replaces"]}
+        replaced = [{**memory, "superseded_by": replaced_by[memory["id"]]}
+                    for memory in state["memories"] if memory["id"] in replaced_by]
+        state["memories"] = [memory for memory in state["memories"] if memory["id"] not in replaced_by]
+        state["memories"].extend(prepared)
         state.update(emotion=after, appraisal=result["appraisal"], step=state["step"] + 1)
         trace = {"step": state["step"], "input": text, "enabled": enabled,
-                 "tiered": tiered, "usage_window": USAGE_WINDOW,
+                 "usage_window": USAGE_WINDOW,
                  "emotion_before": before, "emotion_after": after, "rho": self.rho,
                  "retrieval": rows, "cognition": result,
-                 "written_ids": [m["id"] for m in prepared], "mode": self.provider.mode}
-        self._commit(revision, state, trace)
+                 "written_ids": [m["id"] for m in prepared],
+                 "replaced_ids": [m["id"] for m in replaced], "mode": self.provider.mode}
+        self._commit(revision, state, trace, replaced=replaced)
         return trace
 
     def save(self, name):
@@ -286,12 +288,20 @@ class Runtime:
 
     def restore(self, name):
         revision, _ = self.load()
-        self._commit(revision, self.snapshot(name))
+        state = self.snapshot(name)
+        # A snapshot taken before replacement deleted entries can still carry marked ones.
+        legacy = [memory for memory in state["memories"] if memory.get("superseded_by") is not None]
+        if legacy:
+            state["memories"] = [memory for memory in state["memories"]
+                                 if memory.get("superseded_by") is None]
+        self._commit(revision, state, replaced=legacy)
 
-    def compare(self, text, baseline, a, b, tiered=True):
+    def compare(self, text, baseline, a, b):
         """Four read-only trials: fixed memories/input, only E and retrieval gate vary."""
         text = require_text(text, "input", 2000)
         common = self.snapshot(baseline)
+        common["memories"] = [memory for memory in common["memories"]
+                              if memory.get("superseded_by") is None]
         query = self._embed(text, self.dimension(common), "query")
         trials = []
         for enabled in (True, False):
@@ -299,15 +309,13 @@ class Runtime:
                 emotion = self.snapshot(name)["emotion"]
                 if emotion is None:
                     raise ValueError("Choose snapshots with an initialized emotion")
-                rows = rank(common["memories"], query, emotion, enabled,
-                            step=common["step"], tiered=tiered)
+                rows = rank(common["memories"], query, emotion, enabled, step=common["step"])
                 selected = [row for row in rows if row["selected"]]
                 result = validate_cognition(self.provider.cognize(text, copy.deepcopy(selected)), selected)
                 trials.append({"label": label, "snapshot": name, "enabled": enabled,
                                "emotion": emotion, "retrieval": rows, "cognition": result})
         return {"input": text, "baseline": baseline, "memory_ids": [m["id"] for m in common["memories"]],
-                "trials": trials, "mode": self.provider.mode, "tiered": tiered,
-                "usage_window": USAGE_WINDOW,
+                "trials": trials, "mode": self.provider.mode, "usage_window": USAGE_WINDOW,
                 "note": "Only the emotion-to-read gate is ablated; historical write strengths stay fixed."}
 
     def seed(self):
@@ -330,7 +338,7 @@ class Runtime:
                 "appraisal": appraisal, "vector": vector, "affect": self._embed(appraisal, dimension),
                 "uses": 0, "write_strength": 0.5, "created_step": 0,
                 "created_revision": revision + 1, "origin": "fixture",
-                "source_memory_ids": [], "replaces": [], "superseded_by": None, "recent_uses": []})
+                "source_memory_ids": [], "replaces": [], "recent_uses": []})
             state["next_id"] += 1
         snapshots = {"baseline": copy.deepcopy(state)}
         for name, appraisal in (("A", positive), ("B", negative)):

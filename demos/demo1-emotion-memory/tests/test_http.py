@@ -56,13 +56,8 @@ class HTTPTests(unittest.TestCase):
             "text": "我们再一起试一次吧。", "baseline": "baseline", "a": "A", "b": "B"})
         self.assertEqual(status, 200)
         self.assertEqual(len(result["trials"]), 4)
-        self.assertTrue(result["tiered"])
-        status, plain = self.request("/api/compare", {
-            "text": "再试一次", "baseline": "baseline", "a": "A", "b": "B", "tiered": False})
-        self.assertEqual(status, 200)
-        self.assertFalse(plain["tiered"])
-        self.assertTrue(all(m["selected_by"] == "score_only"
-                            for t in plain["trials"] for m in t["retrieval"] if m["selected"]))
+        self.assertNotIn("tiered", result)
+        self.assertIn("usage_window", result)
         self.assertEqual(before, self.request("/api/state")[1])
         self.assertEqual(self.request("/api/restore", {"name": "B"})[0], 200)
         restored = self.request("/api/state")[1]
@@ -90,8 +85,6 @@ class HTTPTests(unittest.TestCase):
         before = self.request("/api/state")[1]
         self.assertEqual(self.request("/api/step", {"text": ""})[0], 400)
         self.assertEqual(self.request("/api/step", {"text": "hi", "enabled": "false"})[0], 400)
-        self.assertEqual(self.request("/api/step", {"text": "hi", "tiered": "false"})[0], 400)
-        self.assertEqual(self.request("/api/compare", {"tiered": 1})[0], 400)
         self.assertEqual(self.request("/api/step", {"text": "hi"}, {"Origin": "https://other.example"})[0], 403)
         self.assertEqual(self.request("/api/step", {"text": "hi"}, {"Host": "other.example"})[0], 403)
         self.assertEqual(self.request("/api/missing", {})[0], 404)

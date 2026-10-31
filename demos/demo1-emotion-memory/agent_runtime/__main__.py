@@ -16,10 +16,10 @@ def main():
     serve.add_argument("--interval", type=float, default=10)
     sub.add_parser("seed", help="Initialize hand-authored example; requires empty DB")
     sub.add_parser("state")
+    sub.add_parser("replaced", help="Debug log of memories removed by replacement")
     step = sub.add_parser("step")
     step.add_argument("text", nargs="?", help="Omit for a tick without external input")
     step.add_argument("--no-emotion", action="store_true")
-    step.add_argument("--no-tiers", action="store_true", help="Select global top-k without tier quotas")
     for name in ("save", "restore"):
         sub.add_parser(name).add_argument("name")
     compare = sub.add_parser("compare")
@@ -27,7 +27,6 @@ def main():
     compare.add_argument("--baseline", default="baseline")
     compare.add_argument("--a", default="A")
     compare.add_argument("--b", default="B")
-    compare.add_argument("--no-tiers", action="store_true")
     args = parser.parse_args()
     try:
         runtime = Runtime(args.db, APIProvider() if args.mode == "api" else OfflineProvider(), args.rho)
@@ -39,10 +38,12 @@ def main():
             result = runtime.seed()
         elif args.command == "state":
             result = runtime.inspect()
+        elif args.command == "replaced":
+            result = runtime.replaced_log()
         elif args.command == "step":
-            result = runtime.step(args.text, not args.no_emotion, not args.no_tiers)
+            result = runtime.step(args.text, not args.no_emotion)
         elif args.command == "compare":
-            result = runtime.compare(args.text, args.baseline, args.a, args.b, not args.no_tiers)
+            result = runtime.compare(args.text, args.baseline, args.a, args.b)
         else:
             result = getattr(runtime, args.command)(args.name)
         print(json.dumps(result, ensure_ascii=False, indent=2))

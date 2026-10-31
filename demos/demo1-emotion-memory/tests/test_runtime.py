@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from agent_runtime.providers import APIProvider, OfflineProvider, unit
-from agent_runtime.runtime import Runtime, centered, centroid, dot, rank, sigmoid, tier
+from agent_runtime.runtime import Runtime, centered, centroid, dot, rank, sigmoid
 
 
 class RuntimeTests(unittest.TestCase):
@@ -207,13 +207,26 @@ class RuntimeTests(unittest.TestCase):
             self.runtime._commit(revision, old)
         self.assertEqual(before, self.database_dump())
 
-    def test_retrieval_is_pure_and_layer_is_usage_only(self):
+    def test_retrieval_is_pure_and_citation_history_is_inert(self):
         self.runtime.seed()
         _, state = self.runtime.load()
         before = copy.deepcopy(state)
         rank(state["memories"], self.provider.embed("合作"), state["emotion"])
         self.assertEqual(before, state)
-        self.assertEqual([tier(i / 16) for i in (0, 1, 2, 7, 8)], ["Cold", "Cold", "Warm", "Warm", "Hot"])
+        # Citation history is recorded but must not reach the ranking.
+        cited = [dict(memory, recent_uses=list(range(16))) for memory in state["memories"]]
+        project = lambda rows: [(r["id"], r["score"], r["selected"]) for r in rows]
+        self.assertEqual(project(rank(cited, None, None, step=16)),
+                         project(rank(state["memories"], None, None, step=16)))
+
+    def test_rank_rejects_non_integer_budgets(self):
+        for bad in (-1, True, 1.0, "3", None):
+            with self.subTest(top_k=bad), self.assertRaises(ValueError):
+                rank([], None, None, top_k=bad)
+
+    def test_a_memory_equal_to_the_mean_carries_no_signal(self):
+        self.assertEqual(centered([1., 0.], [1., 0.]), [0., 0.])
+        self.assertEqual(centered([1., 0.], None), [1., 0.])
 
     def test_invalid_vectors_rejected(self):
         for vector in ([], [0, 0], [float("nan")], [float("inf")], [True], ["x"]):
