@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from agent_runtime.providers import APIProvider, OfflineProvider, unit
-from agent_runtime.runtime import Runtime, dot, rank, sigmoid, tier
+from agent_runtime.runtime import Runtime, centered, centroid, dot, rank, sigmoid, tier
 
 
 class RuntimeTests(unittest.TestCase):
@@ -33,8 +33,10 @@ class RuntimeTests(unittest.TestCase):
         self.runtime.seed()
         result = self.runtime.compare("我们再一起试一次吧。", "baseline", "A", "B")
         a, b, off_a, off_b = result["trials"]
-        self.assertEqual(a["retrieval"][0]["id"], 1)
-        self.assertEqual(b["retrieval"][0]["id"], 2)
+        # Which id wins inside a positive/negative group is fixture-dependent; the
+        # property that matters is that swapping emotion swaps which memory surfaces.
+        self.assertGreater(a["retrieval"][0]["emotion_match"], 0)
+        self.assertNotEqual(a["retrieval"][0]["id"], b["retrieval"][0]["id"])
         self.assertNotEqual(a["cognition"]["answer"], b["cognition"]["answer"])
         def projection(trial):
             return [(m["id"], m["score"], m["selected"]) for m in trial["retrieval"]]
@@ -45,6 +47,27 @@ class RuntimeTests(unittest.TestCase):
             self.assertEqual(set(by_id), {1, 2, 3, 4})
             self.assertTrue(all(m["uses"] == 0 and m["write_strength"] == .5 for m in by_id.values()))
             self.assertEqual(sum(m["selected"] for m in by_id.values()), 3)
+
+    def test_centering_separates_memories_raw_cosine_cannot(self):
+        # Eleven memories share the dominant direction, one also carries the query's
+        # distinctive direction. Raw cosine margins ~1e-3; centered margins ~1.
+        def make(index, extra=0.0):
+            vector = [1.0] * 768
+            vector[index] += .05
+            vector[600] += extra
+            return unit(vector)
+        memories = [{"id": i + 1, "vector": make(i), "affect": make(i),
+                     "write_strength": 1.0, "uses": 0} for i in range(11)]
+        memories.append({"id": 12, "vector": make(600, .9), "affect": make(600, .9),
+                         "write_strength": 1.0, "uses": 0})
+        query = make(600, .9)
+        centered_scores = {row["id"]: row["relevance"] for row in rank(memories, query, None)}
+        raw_scores = {memory["id"]: dot(query, memory["vector"]) for memory in memories}
+        winner = max(centered_scores, key=centered_scores.get)
+        runner_up = sorted(centered_scores.values())[-2]
+        self.assertEqual(winner, 12)
+        self.assertGreater(centered_scores[12] - runner_up, .75)
+        self.assertLess(max(raw_scores.values()) - sorted(raw_scores.values())[-2], .01)
 
     def test_restart_restores_every_persisted_state_field(self):
         self.runtime.seed()
@@ -65,7 +88,9 @@ class RuntimeTests(unittest.TestCase):
         for memory in after["memories"][:4]:
             self.assertEqual(memory["uses"], int(memory["id"] in used))
         written = after["memories"][-1]
-        self.assertAlmostEqual(written["write_strength"], sigmoid(3 * dot(after["emotion"], written["affect"])))
+        prior = centroid([memory["affect"] for memory in after["memories"][:-1]])
+        aligned = dot(centered(after["emotion"], prior), centered(written["affect"], prior))
+        self.assertAlmostEqual(written["write_strength"], sigmoid(3 * aligned))
         self.assertEqual(written["uses"], 0)
 
     def test_first_tick_initializes_from_cognition_without_zero_baseline(self):

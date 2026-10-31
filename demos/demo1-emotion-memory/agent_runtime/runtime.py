@@ -29,12 +29,43 @@ def require_text(value, field, maximum=6000):
     return value.strip()
 
 
+def centroid(vectors):
+    """Library mean. Ordinary text embeddings share one large component; the mean is
+    what an uncentered cosine mostly measures."""
+    if not vectors:
+        return None
+    total = [0.0] * len(vectors[0])
+    for vector in vectors:
+        for index, value in enumerate(vector):
+            total[index] += value
+    return [value / len(vectors) for value in total]
+
+
+def centered(vector, mean):
+    """Unit residual against the library mean, so only the deviation is compared."""
+    if vector is None or mean is None:
+        return vector
+    residual = [value - origin for value, origin in zip(vector, mean)]
+    norm = math.sqrt(sum(value * value for value in residual))
+    if norm < 1e-6:
+        # Indistinguishable from the mean: it carries no signal, so it contributes none.
+        return [0.0] * len(residual)
+    return [value / norm for value in residual]
+
+
 def rank(memories, query, emotion, enabled=True, top_k=3):
-    """No mutations. Return all score components and a deterministic selection."""
+    """No mutations. Return all score components and a deterministic selection.
+    Both sides of each comparison are centered on the library mean first."""
+    mean_vector = centroid([memory["vector"] for memory in memories])
+    mean_affect = centroid([memory["affect"] for memory in memories])
+    query, emotion = centered(query, mean_vector), centered(emotion, mean_affect)
     rows = []
     for memory in memories:
-        relevance = max(0.0, dot(query, memory["vector"])) if query is not None else 1.0
-        match = dot(emotion, memory["affect"]) if emotion is not None else 0.0
+        # Centered cosine is signed, so it is shifted into [0, 1] instead of clipped:
+        # clipping would flatten the half of the library that sits below the mean and
+        # leave the ordering there to the id tie-break. 0.5 means "average content".
+        relevance = (1 + dot(query, centered(memory["vector"], mean_vector))) / 2 if query is not None else 1.0
+        match = dot(emotion, centered(memory["affect"], mean_affect)) if emotion is not None else 0.0
         read = sigmoid(4 * match) if enabled else 0.5
         score = relevance * read * memory["write_strength"]
         rows.append({**copy.deepcopy(memory), "tier": tier(memory["uses"]),
@@ -156,11 +187,15 @@ class Runtime:
         dimension = len(feeling)
         after = feeling if before is None else [self.rho * a + (1 - self.rho) * b for a, b in zip(before, feeling)]
         # Finish ALL provider calls before changing state. Each memory has its own affect.
+        # Write strength compares against the existing affect mean, so a new memory is
+        # scored by how much it differs from what is already stored, not by the shared bulk.
+        mean_affect = centroid([memory["affect"] for memory in state["memories"]])
         prepared = []
         for proposal in result["memories"]:
             affect = self._embed(proposal["appraisal"], dimension)
+            aligned = dot(centered(after, mean_affect), centered(affect, mean_affect))
             prepared.append({**proposal, "vector": self._embed(proposal["content"], dimension, "document"),
-                             "affect": affect, "write_strength": sigmoid(3 * dot(after, affect)), "uses": 0})
+                             "affect": affect, "write_strength": sigmoid(3 * aligned), "uses": 0})
         for memory in state["memories"]:
             if memory["id"] in result["used_memory_ids"]:
                 memory["uses"] += 1
