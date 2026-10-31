@@ -1,0 +1,16 @@
+library,round,norm,cosine_previous
+uncentered-9turn,1,1.0000,
+uncentered-9turn,2,0.9731,0.9956
+uncentered-9turn,3,0.9343,0.9929
+uncentered-9turn,4,0.9104,0.9938
+uncentered-9turn,5,0.8925,0.9939
+uncentered-9turn,6,0.8790,0.9940
+uncentered-9turn,7,0.8680,0.9939
+uncentered-9turn,8,0.8650,0.9950
+uncentered-9turn,9,0.8638,0.9953
+centered-6turn,1,1.0000,
+centered-6turn,2,0.9579,0.9933
+centered-6turn,3,0.9292,0.9939
+centered-6turn,4,0.9082,0.9941
+centered-6turn,5,0.8889,0.9936
+centered-6turn,6,0.8805,0.9948

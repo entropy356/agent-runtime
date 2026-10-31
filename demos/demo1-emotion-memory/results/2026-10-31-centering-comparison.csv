@@ -1,0 +1,3 @@
+mode,match_sd,read_min,read_max,read_range,relevance_sd,relevance_min,relevance_max,gate_off_top3_order_changed,gate_off_top3_set_changed,emotion_flip_top3_changed,pairwise_cosine_mean,mean_vector_norm,old_vs_new_top1_changed,old_vs_new_top3_set_changed
+uncentered,0.027,0.920,0.947,0.027,0.069,0.537,0.889,2/9,0/9,9/9,0.739,0.868,2/9,7/9
+centered,0.115,0.298,0.652,0.353,0.100,0.360,0.857,9/9,7/9,9/9,0.739,0.868,2/9,7/9

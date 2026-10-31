@@ -56,7 +56,7 @@ A/B 使用相同输入、相同记忆库和相同其他条件，只替换 Emotio
 
 ## 当前观察
 
-2026-10-31，完整记录见 [Emotion–Memory 相互作用记录](../../docs/reports/2026-10-31-emotion-memory-interaction.md)：
+2026-10-31，完整记录见 [Emotion–Memory 相互作用记录](experiments/2026-10-31-emotion-memory-interaction.md)，原始指标见 [`results/`](results/)：
 
 - 不减去库均值时 `read_i` 恒在 0.92–0.95，与内容无关；中心化后跨度 0.353。
 - 12 条记忆、同一输入、暖与冷两种情绪注入，首三只有 `#6` 重合。
