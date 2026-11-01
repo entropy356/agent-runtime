@@ -96,6 +96,7 @@ def rank(memories, query, top_k=5):
 
     Stability has no direct retrieval bonus; it only changes future decay.
     With no query (an internal tick), current weight alone determines order.
+    Embedding vectors are intentionally omitted from returned rows and traces.
     """
     if type(top_k) is not int or top_k < 1:
         raise ValueError("top_k must be a positive integer")
@@ -107,8 +108,9 @@ def rank(memories, query, top_k=5):
         else:
             similarity = _dot(query, memory["vector"])
             relevance = max(0.0, min(1.0, (1 + similarity) / 2))
+        visible = {key: value for key, value in memory.items() if key != "vector"}
         rows.append({
-            **copy.deepcopy(memory),
+            **copy.deepcopy(visible),
             "relevance": relevance,
             "score": relevance * weight,
         })

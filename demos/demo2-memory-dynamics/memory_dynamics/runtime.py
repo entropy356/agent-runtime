@@ -207,6 +207,14 @@ class Runtime:
 
     def inspect(self):
         revision, state = self.load()
+        visible_state = {
+            **state,
+            "memories": [],
+        }
+        for memory in state["memories"]:
+            visible = {key: value for key, value in memory.items() if key != "vector"}
+            visible["embedding_dimensions"] = len(memory["vector"])
+            visible_state["memories"].append(visible)
         with self.connect() as db:
             traces = [
                 json.loads(row[0])
@@ -214,7 +222,7 @@ class Runtime:
             ]
         return {
             "revision": revision,
-            "state": state,
+            "state": visible_state,
             "traces": traces,
             "mode": self.provider.mode,
             "chat_profile": getattr(self.provider, "chat_profile", None),
