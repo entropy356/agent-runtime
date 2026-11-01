@@ -56,6 +56,8 @@ class HTTPTests(unittest.TestCase):
             "text": "我们再一起试一次吧。", "baseline": "baseline", "a": "A", "b": "B"})
         self.assertEqual(status, 200)
         self.assertEqual(len(result["trials"]), 4)
+        self.assertNotIn("tiered", result)
+        self.assertIn("usage_window", result)
         self.assertEqual(before, self.request("/api/state")[1])
         self.assertEqual(self.request("/api/restore", {"name": "B"})[0], 200)
         restored = self.request("/api/state")[1]

@@ -10,12 +10,15 @@ def main():
     parser.add_argument("--mode", choices=("offline", "api"), default="offline")
     parser.add_argument("--db", default="data/runtime.sqlite3")
     parser.add_argument("--rho", type=float, default=0.85)
+    parser.add_argument("--recall-limit", type=int, default=2,
+                        help="Model-initiated extra retrievals per round (0 disables recall)")
     sub = parser.add_subparsers(dest="command", required=True)
     serve = sub.add_parser("serve", help="Open the local dashboard")
     serve.add_argument("--port", type=int, default=8765)
     serve.add_argument("--interval", type=float, default=10)
     sub.add_parser("seed", help="Initialize hand-authored example; requires empty DB")
     sub.add_parser("state")
+    sub.add_parser("replaced", help="Debug log of memories removed by replacement")
     step = sub.add_parser("step")
     step.add_argument("text", nargs="?", help="Omit for a tick without external input")
     step.add_argument("--no-emotion", action="store_true")
@@ -28,7 +31,8 @@ def main():
     compare.add_argument("--b", default="B")
     args = parser.parse_args()
     try:
-        runtime = Runtime(args.db, APIProvider() if args.mode == "api" else OfflineProvider(), args.rho)
+        runtime = Runtime(args.db, APIProvider() if args.mode == "api" else OfflineProvider(),
+                          args.rho, args.recall_limit)
         if args.command == "serve":
             from .server import serve
             serve(runtime, args.port, args.interval)
@@ -37,6 +41,8 @@ def main():
             result = runtime.seed()
         elif args.command == "state":
             result = runtime.inspect()
+        elif args.command == "replaced":
+            result = runtime.replaced_log()
         elif args.command == "step":
             result = runtime.step(args.text, not args.no_emotion)
         elif args.command == "compare":

@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from agent_runtime.providers import APIProvider, OfflineProvider, unit
-from agent_runtime.runtime import Runtime, centered, centroid, dot, rank, sigmoid, tier
+from agent_runtime.runtime import Runtime, centered, centroid, dot, rank, sigmoid
 
 
 class RuntimeTests(unittest.TestCase):
@@ -117,6 +117,51 @@ class RuntimeTests(unittest.TestCase):
                 self.runtime.step("输入")
         self.assertEqual(before, self.database_dump())
 
+    def test_dot_rejects_mismatched_dimensions(self):
+        with self.assertRaises(ValueError):
+            dot([1.0], [1.0, 0.0])
+
+    def test_cognition_shape_errors_never_commit(self):
+        self.runtime.seed()
+        before = self.database_dump()
+        base = {"answer": "ok", "appraisal": "感受", "used_memory_ids": [], "memories": []}
+        cases = {
+            "not an object": ["not", "a", "dict"],
+            "four proposals": {**base, "memories": [{"content": "a", "appraisal": "b"}] * 4},
+            "proposal is not an object": {**base, "memories": ["text"]},
+        }
+        for label, result in cases.items():
+            with self.subTest(label):
+                with patch.object(self.provider, "cognize", return_value=result):
+                    with self.assertRaises(ValueError):
+                        self.runtime.step("输入")
+                self.assertEqual(before, self.database_dump())
+
+    def test_compare_rejects_a_non_object_cognition(self):
+        # The step path screens the recall request first, so this guard is reached by compare.
+        self.runtime.seed()
+        with patch.object(self.provider, "cognize", return_value=["not", "a", "dict"]):
+            with self.assertRaises(ValueError):
+                self.runtime.compare("合作", "baseline", "A", "B")
+
+    def test_invalid_inputs_and_missing_snapshots_are_rejected(self):
+        self.runtime.save("light")
+        self.runtime.seed()
+        before = self.database_dump()
+        for text in ("", "   ", 5):
+            with self.subTest(text=text):
+                with self.assertRaises(ValueError):
+                    self.runtime.step(text)
+        self.assertEqual(before, self.database_dump())
+        with self.assertRaises(ValueError):
+            Runtime(self.path, OfflineProvider(), rho=1.0)
+        with self.assertRaises(ValueError):
+            self.runtime.restore("missing")
+        # "light" was saved before the first tick, so it has no emotion to compare with.
+        with self.assertRaises(ValueError):
+            self.runtime.compare("输入", "baseline", "light", "B")
+        self.assertEqual(before, self.database_dump())
+
     def test_late_embedding_failure_never_commits(self):
         self.runtime.seed()
         before = self.database_dump()
@@ -169,13 +214,26 @@ class RuntimeTests(unittest.TestCase):
             self.runtime._commit(revision, old)
         self.assertEqual(before, self.database_dump())
 
-    def test_retrieval_is_pure_and_layer_is_usage_only(self):
+    def test_retrieval_is_pure_and_citation_history_is_inert(self):
         self.runtime.seed()
         _, state = self.runtime.load()
         before = copy.deepcopy(state)
         rank(state["memories"], self.provider.embed("合作"), state["emotion"])
         self.assertEqual(before, state)
-        self.assertEqual([tier(i) for i in (0, 2, 3, 7, 8)], ["Cold", "Cold", "Warm", "Warm", "Hot"])
+        # Citation history is recorded but must not reach the ranking.
+        cited = [dict(memory, recent_uses=list(range(16))) for memory in state["memories"]]
+        project = lambda rows: [(r["id"], r["score"], r["selected"]) for r in rows]
+        self.assertEqual(project(rank(cited, None, None, step=16)),
+                         project(rank(state["memories"], None, None, step=16)))
+
+    def test_rank_rejects_non_integer_budgets(self):
+        for bad in (-1, True, 1.0, "3", None):
+            with self.subTest(top_k=bad), self.assertRaises(ValueError):
+                rank([], None, None, top_k=bad)
+
+    def test_a_memory_equal_to_the_mean_carries_no_signal(self):
+        self.assertEqual(centered([1., 0.], [1., 0.]), [0., 0.])
+        self.assertEqual(centered([1., 0.], None), [1., 0.])
 
     def test_invalid_vectors_rejected(self):
         for vector in ([], [0, 0], [float("nan")], [float("inf")], [True], ["x"]):
@@ -205,10 +263,22 @@ class APIAdapterTests(unittest.TestCase):
             self.provider.cognize("当前输入", [memory])
         payload = request.call_args.args[1]
         user = json.loads(payload["messages"][1]["content"])
-        self.assertEqual(user, {"input": "当前输入", "memories": [{"id": 1, "content": "可见内容"}]})
+        self.assertEqual(user, {"input": "当前输入", "recall_left": 0, "memories": [{
+            "id": 1, "content": "可见内容", "created_step": None, "origin": "unknown",
+            "source_memory_ids": [], "replaces": []}]})
         self.assertEqual(request.call_args.args[2], {"Authorization": "Bearer chat-secret"})
         self.assertNotIn("chat-secret", self.provider.profile)
         self.assertNotIn("embed-secret", self.provider.profile)
+
+    def test_prompt_reports_library_size_so_a_partial_context_is_visible(self):
+        # Three memories with no total read as the whole library; then there is never a
+        # reason to ask for more, which is exactly what the first live run did.
+        response = {"choices": [{"message": {"content": json.dumps(
+            {"answer": "ok", "appraisal": "平静"})}}]}
+        with patch("agent_runtime.providers._request", return_value=response) as request:
+            self.provider.cognize("输入", [], 2, library_size=9)
+        user = json.loads(request.call_args.args[1]["messages"][1]["content"])
+        self.assertEqual((user["recall_left"], user["library_size"]), (2, 9))
 
     def test_malformed_provider_output_is_rejected(self):
         with patch("agent_runtime.providers._request", return_value={"choices": [{"message": {"content": "not JSON"}}]}):
