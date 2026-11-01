@@ -21,7 +21,7 @@ class RuntimeTests(unittest.TestCase):
             stability_protection=0.8,
             recovery_rate=0.5,
             stability_gain=0.2,
-            top_k=2,
+            top_k=3,
         )
         self.runtime = Runtime(self.path, self.provider, self.config)
         self.runtime.initialize([

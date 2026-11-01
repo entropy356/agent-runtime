@@ -66,13 +66,13 @@ def activate(memory, config):
     about human memory.
     """
     before_weight = _state_value(memory, "weight")
-    before_stability = _state_value(memory, "stability")
+    stored_stability = _state_value(memory, "stability")
+    before_stability = stored_stability if config.mode == "two-state" else 0.0
     after_weight = before_weight + (1 - before_weight) * config.recovery_rate
     if config.mode == "two-state":
         gain = config.stability_gain * (1 - before_weight)
         after_stability = before_stability + (1 - before_stability) * gain
     else:
-        gain = 0.0
         after_stability = 0.0
     memory["weight"] = min(1.0, after_weight)
     memory["stability"] = min(1.0, after_stability)

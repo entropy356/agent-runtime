@@ -43,10 +43,19 @@ class DynamicsModelTests(unittest.TestCase):
     def test_weight_only_ablation_has_no_stability_state(self):
         config = DynamicsConfig(mode="weight-only", stability_gain=0.9)
         memory = {"weight": 0.4, "stability": 0.8}
-        activate(memory, config)
+        result = activate(memory, config)
         self.assertEqual(memory["stability"], 0.0)
+        self.assertEqual(result["stability_gain"], 0.0)
         decay(memory, config)
         self.assertEqual(memory["stability"], 0.0)
+
+    def test_stability_does_not_directly_change_current_retrieval_score(self):
+        memories = [
+            {"id": 1, "vector": [1.0, 0.0], "weight": 0.7, "stability": 0.0},
+            {"id": 2, "vector": [1.0, 0.0], "weight": 0.7, "stability": 0.99},
+        ]
+        rows = rank(memories, [1.0, 0.0], top_k=2)
+        self.assertEqual(rows[0]["score"], rows[1]["score"])
 
     def test_rank_combines_relevance_and_weight_without_mutating_state(self):
         memories = [
