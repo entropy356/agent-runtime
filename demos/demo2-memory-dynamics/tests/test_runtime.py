@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -51,6 +50,8 @@ class RuntimeTests(unittest.TestCase):
         self.assertGreater(first["stability"], 0.0)
         self.assertEqual(second["stability"], 0.0)
         self.assertEqual(second["activated_count"], 0)
+        self.assertNotIn("vector", trace["retrieval"][0])
+        self.assertIn("embedding_dimensions", first)
 
     def test_successful_recall_changes_future_decay_rate(self):
         with patch.object(self.provider, "cognize", return_value=self.result([1])):
@@ -72,7 +73,8 @@ class RuntimeTests(unittest.TestCase):
 
     def test_tick_without_input_still_advances_and_decays(self):
         before = self.runtime.inspect()["state"]["memories"][0]["weight"]
-        trace = self.runtime.step()
+        with patch.object(self.provider, "cognize", return_value=self.result([])):
+            trace = self.runtime.step()
         after = self.runtime.inspect()["state"]["memories"][0]["weight"]
         self.assertIsNone(trace["input"])
         self.assertLess(after, before)
