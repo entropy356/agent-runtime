@@ -86,6 +86,10 @@ def main():
             result = {
                 "scenario": scenario.get("name", Path(args.scenario).stem),
                 "mode": provider.mode,
+                "provider": {
+                    "chat": getattr(provider, "chat_profile", None),
+                    "embedding": provider.profile,
+                },
                 "config": config.to_dict(),
                 "traces": traces,
                 "final": runtime.inspect()["state"],

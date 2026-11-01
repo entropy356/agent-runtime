@@ -193,6 +193,8 @@ class Runtime:
             "step": state["step"],
             "input": text,
             "mode": self.provider.mode,
+            "chat_profile": getattr(self.provider, "chat_profile", None),
+            "embedding_profile": self.provider.profile,
             "config": self.config.to_dict(),
             "decayed": decayed,
             "retrieval": rows,
@@ -215,5 +217,6 @@ class Runtime:
             "state": state,
             "traces": traces,
             "mode": self.provider.mode,
+            "chat_profile": getattr(self.provider, "chat_profile", None),
             "embedding_profile": self.provider.profile,
         }
