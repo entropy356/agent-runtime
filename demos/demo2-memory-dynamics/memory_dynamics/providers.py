@@ -25,6 +25,7 @@ class OfflineProvider:
 
     mode = "offline"
     profile = "offline:sha256-character-bigrams-256:v1"
+    chat_profile = "offline:template-cognition-v1"
 
     def embed(self, text, task=None):
         normalized = "".join(text.lower().split())
@@ -191,6 +192,7 @@ class APIProvider:
         if not math.isfinite(chat_timeout) or chat_timeout <= 0 or not math.isfinite(embed_timeout) or embed_timeout <= 0:
             raise ValueError("Provider timeouts must be positive finite numbers")
         self.chat_base, self.chat_key, self.chat_model = chat_base, chat_key, chat_model
+        self.chat_profile = f"openai-compatible:{chat_model}"
         self.chat_proxy = _env("AGENT_CHAT_PROXY") or None
         self.chat_timeout = chat_timeout
         embed_proxy = _env("AGENT_EMBED_PROXY") or None

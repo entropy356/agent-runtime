@@ -1,31 +1,31 @@
 {
   "name": "spacing-and-interference",
   "memories": [
-    "Mira prefers short written updates before meetings.",
-    "The spare key is kept in the blue tin above the kitchen cabinet.",
-    "I promised Lin that I would send the first draft on Friday.",
-    "The old workshop had a red door; I used to repair radios there with my grandfather."
+    "米拉喜欢在会议前收到简短的书面进度。",
+    "备用钥匙放在厨房橱柜上方的蓝色铁盒里。",
+    "我答应周五把第一版草稿发给林。",
+    "老工作室有一扇红色的门，我以前常和祖父在那里修收音机。"
   ],
   "turns": [
-    "What update format does Mira prefer before meetings?",
+    "米拉喜欢什么样的会议前进度？",
     null,
     null,
     null,
-    "Where is the spare key kept?",
-    null,
-    null,
-    null,
-    null,
-    "What update format does Mira prefer before meetings?",
+    "备用钥匙放在哪里？",
     null,
     null,
     null,
     null,
+    "米拉喜欢什么样的会议前进度？",
     null,
     null,
     null,
     null,
     null,
-    "What did I promise Lin, and when?"
+    null,
+    null,
+    null,
+    null,
+    "我答应林什么时候做什么？"
   ]
 }
