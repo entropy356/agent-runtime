@@ -30,7 +30,7 @@ def main():
     parser.add_argument("--stability-protection", type=float, default=0.85)
     parser.add_argument("--recovery-rate", type=float, default=0.65)
     parser.add_argument("--stability-gain", type=float, default=0.12)
-    parser.add_argument("--top-k", type=int, default=5)
+    parser.add_argument("--top-k", type=int, default=3)
     sub = parser.add_subparsers(dest="command", required=True)
 
     init = sub.add_parser("init", help="Initialize memories from a scenario JSON file")

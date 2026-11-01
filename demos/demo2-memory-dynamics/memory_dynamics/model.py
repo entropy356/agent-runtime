@@ -12,7 +12,7 @@ class DynamicsConfig:
     stability_protection: float = 0.85
     recovery_rate: float = 0.65
     stability_gain: float = 0.12
-    top_k: int = 5
+    top_k: int = 3
 
     def __post_init__(self):
         if self.mode not in ("weight-only", "two-state"):
