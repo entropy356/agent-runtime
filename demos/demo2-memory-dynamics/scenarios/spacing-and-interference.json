@@ -1,0 +1,31 @@
+{
+  "name": "spacing-and-interference",
+  "memories": [
+    "Mira prefers short written updates before meetings.",
+    "The spare key is kept in the blue tin above the kitchen cabinet.",
+    "I promised Lin that I would send the first draft on Friday.",
+    "The old workshop had a red door; I used to repair radios there with my grandfather."
+  ],
+  "turns": [
+    "What update format does Mira prefer before meetings?",
+    null,
+    null,
+    null,
+    "Where is the spare key kept?",
+    null,
+    null,
+    null,
+    null,
+    "What update format does Mira prefer before meetings?",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    "What did I promise Lin, and when?"
+  ]
+}
