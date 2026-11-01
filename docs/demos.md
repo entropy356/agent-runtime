@@ -12,11 +12,17 @@ Demo 是围绕一个稳定问题持续演化的实验单元。
 
 ```text
 demos/
-└── demo1-emotion-memory/
+├── demo1-emotion-memory/
+│   ├── README.md
+│   ├── experiments/
+│   ├── results/
+│   ├── agent_runtime/
+│   └── tests/
+└── demo2-memory-dynamics/
     ├── README.md
-    ├── experiments/
+    ├── scenarios/
     ├── results/
-    ├── agent_runtime/
+    ├── memory_dynamics/
     └── tests/
 ```
 
@@ -44,8 +50,7 @@ Demo 使用稳定编号和简短主题名，例如：
 ```text
 demos/
 ├── demo1-emotion-memory/
-├── demo2-emotion-inertia/
-└── demo3-emotion-clock/
+└── demo2-memory-dynamics/
 ```
 
 编号一经使用保持不变。内部实现可以持续演化，不因函数或算法调整改变编号。
