@@ -5,7 +5,7 @@
 ## 文档
 
 - [核心设计](docs/design.md)
-- [项目愿景](docs/vision.md)
+- [项目规范](docs/vision.md)
 - [Demo 规则](docs/demos.md)
 
 ## 当前 Demo
